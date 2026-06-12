@@ -63,9 +63,11 @@ def preprocess(args):
 
 
 def bench_torchpcl(rows, source, target, t_gt, args, device, backend="warp"):
-    src = torch.from_numpy(source.points()[:, :3]).to(device)
-    tgt = torch.from_numpy(target.points()[:, :3]).to(device)
-    normals = torch.from_numpy(target.normals()[:, :3]).to(device)
+    # float32 inputs: torchpcl works in the input precision (only the
+    # transformation and the small solves stay float64).
+    src = torch.from_numpy(source.points()[:, :3]).to(device, torch.float32)
+    tgt = torch.from_numpy(target.points()[:, :3]).to(device, torch.float32)
+    normals = torch.from_numpy(target.normals()[:, :3]).to(device, torch.float32)
     criteria = torchpcl.ICPConvergenceCriteria(max_iteration=args.max_iters)
     sync = torch.cuda.synchronize if device.type == "cuda" else None
 

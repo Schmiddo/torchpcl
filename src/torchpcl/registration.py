@@ -31,14 +31,14 @@ def _evaluate(
     """
     indices, dist2 = nns.query(points)
     mask = indices >= 0
-    num_inliers = int(mask.sum())
+    # Unmatched slots hold radius^2, so zero them before summing; one
+    # stacked transfer keeps this at a single host sync per iteration.
+    stats = torch.stack(
+        [mask.sum().to(torch.float64), (dist2.to(torch.float64) * mask).sum()]
+    ).cpu()
+    num_inliers = int(stats[0])
     fitness = num_inliers / len(points)
-    if num_inliers > 0:
-        inlier_rmse = math.sqrt(float(dist2[mask].sum()) / num_inliers)
-    else:
-        inlier_rmse = 0.0
-    indices = indices.clone()
-    indices[~mask] = -1
+    inlier_rmse = math.sqrt(float(stats[1]) / num_inliers) if num_inliers > 0 else 0.0
     result = RegistrationResult(
         transformation=transformation.clone(),
         correspondences=indices,
@@ -113,16 +113,20 @@ def icp(
     _validate_inputs(source, target, max_correspondence_distance, estimation, target_normals)
 
     device = source.device
-    source64 = source.to(torch.float64)
-    target64 = target.to(torch.float64)
-    normals64 = target_normals.to(torch.float64) if target_normals is not None else None
+    # Points are kept in the input precision; only the cumulative
+    # transformation and the small solves (in estimation) are float64.
+    source_pts = source.contiguous()
+    target_pts = target.to(source.dtype).contiguous()
+    normals_pts = (
+        target_normals.to(source.dtype).contiguous() if target_normals is not None else None
+    )
     if init is not None:
         transformation = init.to(device=device, dtype=torch.float64).clone()
     else:
         transformation = torch.eye(4, dtype=torch.float64, device=device)
 
-    nns = _make_nns(target64, max_correspondence_distance, backend)
-    current = transform_points(source64, transformation)
+    nns = _make_nns(target_pts, max_correspondence_distance, backend)
+    current = transform_points(source_pts, transformation)
 
     prev_fitness = 0.0
     prev_inlier_rmse = 0.0
@@ -149,16 +153,18 @@ def icp(
         inlier_indices = result.correspondences[mask]
         delta = estimation.compute_transformation(
             current[mask],
-            target64[inlier_indices],
-            normals64[inlier_indices] if normals64 is not None else None,
+            target_pts[inlier_indices],
+            normals_pts[inlier_indices] if normals_pts is not None else None,
         )
         transformation = delta @ transformation
-        current = transform_points(current, delta)
+        # Re-apply the full float64 transformation to the original points
+        # rather than chaining deltas, so float32 rounding does not drift.
+        current = transform_points(source_pts, transformation)
         num_iterations += 1
 
     # Recompute metrics for the final transformation (matches Open3D,
     # which re-evaluates after the iteration loop ends).
-    result, _ = _evaluate(nns, transform_points(source64, transformation), transformation)
+    result, _ = _evaluate(nns, current, transformation)
     result.converged = converged
     result.num_iterations = num_iterations
     return result
@@ -180,13 +186,13 @@ def evaluate_registration(
     if max_correspondence_distance <= 0:
         raise ValueError("max_correspondence_distance must be positive")
 
-    source64 = source.to(torch.float64)
-    target64 = target.to(torch.float64)
+    source_pts = source.contiguous()
+    target_pts = target.to(source.dtype).contiguous()
     if transformation is not None:
         transformation = transformation.to(device=source.device, dtype=torch.float64)
     else:
         transformation = torch.eye(4, dtype=torch.float64, device=source.device)
 
-    nns = _make_nns(target64, max_correspondence_distance, backend)
-    result, _ = _evaluate(nns, transform_points(source64, transformation), transformation)
+    nns = _make_nns(target_pts, max_correspondence_distance, backend)
+    result, _ = _evaluate(nns, transform_points(source_pts, transformation), transformation)
     return result
