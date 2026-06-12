@@ -33,6 +33,20 @@ result.correspondences  # (N,) int64 target index, -1 = none
 
 # Evaluate a given transformation without iterating
 tp.evaluate_registration(source, target, 0.1, transformation)
+
+# Preprocessing
+down = tp.voxel_downsample(target, voxel_size=0.05)     # per-voxel means
+normals = tp.estimate_normals(down, radius=0.2, k=30)   # hybrid k-NN + PCA
+                                                        # viewpoint=... to orient
+# backend="cubql" (CUDA): radius becomes optional (true k-NN, k <= 64)
+normals = tp.estimate_normals(down, k=30, backend="cubql")
+
+# Cloud comparison (accuracy/completion from prediction->reference /
+# reference->prediction; chamfer = accuracy + completion)
+m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
+m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
+# backend="cubql" (CUDA): BVH search instead of brute force --
+# orders of magnitude faster for large clouds
 ```
 
 The API mirrors `open3d.t.pipelines.registration.icp` semantics:

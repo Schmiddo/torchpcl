@@ -8,6 +8,7 @@
 #include "cuBQL/bvh.h"
 #include "cuBQL/builder/cuda.h"
 #include "cuBQL/queries/pointData/findClosest.h"
+#include "cuBQL/queries/pointData/knn.h"
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -40,6 +41,30 @@ __global__ void nn_query(
 }
 
 constexpr int kBlock = 256;
+// Per-thread candidate buffer for findKNN lives in local memory; this
+// caps the supported k (checked on the host side).
+constexpr int kMaxKnn = 64;
+
+__global__ void knn_query(
+    int32_t* out_idx,
+    float* out_dist2,
+    cuBQL::bvh3f bvh,
+    const cuBQL::vec3f* pts,
+    const cuBQL::vec3f* queries,
+    int n,
+    int k,
+    float max_d2) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  cuBQL::knn::Candidate cand[kMaxKnn];
+  const cuBQL::knn::Result res =
+      cuBQL::points::findKNN(cand, k, bvh, pts, queries[i], max_d2);
+  for (int j = 0; j < k; ++j) {
+    const bool found = j < res.numFound;
+    out_idx[size_t(i) * k + j] = found ? cand[j].primID : -1;
+    out_dist2[size_t(i) * k + j] = found ? cand[j].sqrDist : max_d2;
+  }
+}
 
 class PointBVH {
  public:
@@ -114,6 +139,36 @@ class PointBVH {
     return {out_idx, out_dist2};
   }
 
+  std::tuple<at::Tensor, at::Tensor> knn(at::Tensor queries, int64_t k, double radius) {
+    TORCH_CHECK(queries.is_cuda(), "queries must be a CUDA tensor");
+    TORCH_CHECK(queries.get_device() == device_index_,
+                "queries must be on the same device as the indexed points");
+    TORCH_CHECK(queries.scalar_type() == at::kFloat, "queries must be float32");
+    TORCH_CHECK(queries.dim() == 2 && queries.size(1) == 3, "queries must have shape (M, 3)");
+    TORCH_CHECK(k >= 1 && k <= kMaxKnn, "k must be in [1, ", kMaxKnn, "]");
+    auto queries_c = queries.contiguous();
+    const auto m = queries_c.size(0);
+
+    const c10::cuda::CUDAGuard guard(device_index_);
+    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    at::Tensor out_idx = at::empty({m, k}, queries_c.options().dtype(at::kInt));
+    at::Tensor out_dist2 = at::empty({m, k}, queries_c.options().dtype(at::kFloat));
+    if (m > 0) {
+      const float max_d2 = static_cast<float>(radius * radius);
+      knn_query<<<(m + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
+          out_idx.data_ptr<int32_t>(),
+          out_dist2.data_ptr<float>(),
+          bvh_,
+          reinterpret_cast<const cuBQL::vec3f*>(points_.data_ptr<float>()),
+          reinterpret_cast<const cuBQL::vec3f*>(queries_c.data_ptr<float>()),
+          static_cast<int>(m),
+          static_cast<int>(k),
+          max_d2);
+      C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    return {out_idx, out_dist2};
+  }
+
  private:
   at::Tensor points_;  // keeps the indexed device memory alive
   cuBQL::bvh3f bvh_{};
@@ -125,5 +180,6 @@ class PointBVH {
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<PointBVH>(m, "PointBVH")
       .def(py::init<at::Tensor>())
-      .def("query", &PointBVH::query);
+      .def("query", &PointBVH::query)
+      .def("knn", &PointBVH::knn);
 }

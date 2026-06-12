@@ -86,6 +86,49 @@ def test_backends_agree():
         assert torch.equal(wi[unique], ci[unique])
 
 
+def test_knn_query_matches_brute_force(device, nns_factory):
+    points = random_cloud(1000, device, seed=0)
+    queries = random_cloud(200, device, seed=1)
+    radius, k = 0.1, 5
+
+    idx, dist2 = nns_factory(points, radius).knn_query(queries, k)
+
+    d = torch.cdist(queries.to(torch.float64), points.to(torch.float64)) ** 2
+    ref_d, _ = d.topk(k, dim=1, largest=False)
+    ref_valid = ref_d <= radius * radius
+
+    valid = idx >= 0
+    assert torch.equal(valid, ref_valid)
+    assert torch.allclose(
+        dist2[valid].to(torch.float64), ref_d[ref_valid], atol=1e-5
+    )
+    # Rows come back sorted by distance (inf-padded; inf-inf diffs are
+    # nan and carry no ordering information).
+    padded = torch.where(valid, dist2, torch.full_like(dist2, float("inf")))
+    diffs = padded.diff(dim=1)
+    assert (diffs[torch.isfinite(diffs)] >= -1e-7).all()
+
+
+def test_knn_unbounded_cubql():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    if (reason := cubql_skip_reason()) is not None:
+        pytest.skip(reason)
+    import math
+
+    from torchpcl.search_cubql import CuBQLNearestNeighborSearch
+
+    points = random_cloud(1000, "cuda", seed=0)
+    queries = random_cloud(200, "cuda", seed=1)
+    k = 8
+    idx, dist2 = CuBQLNearestNeighborSearch(points, math.inf).knn_query(queries, k)
+    assert (idx >= 0).all()  # unbounded: k neighbors always found
+
+    d = torch.cdist(queries.to(torch.float64), points.to(torch.float64)) ** 2
+    ref_d, _ = d.topk(k, dim=1, largest=False)
+    assert torch.allclose(dist2.to(torch.float64), ref_d, atol=1e-5)
+
+
 def test_boundary_distance(device, nns_factory):
     # A point just inside the radius is found, just outside is not.
     points = torch.zeros(1, 3, dtype=torch.float64, device=device)

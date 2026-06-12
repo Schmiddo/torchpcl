@@ -142,3 +142,13 @@ class CuBQLNearestNeighborSearch:
         queries_f32 = queries.to(torch.float32).contiguous()
         indices, dist2 = self._bvh.query(queries_f32, self._radius)
         return indices.to(torch.int64), dist2
+
+    def knn_query(self, queries: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return up to k nearest neighbors within the radius per query.
+
+        Same interface as the warp backend's knn_query, but the radius may
+        be ``math.inf`` for unbounded (true) k-NN. k is capped at 64.
+        """
+        queries_f32 = queries.to(torch.float32).contiguous()
+        indices, dist2 = self._bvh.knn(queries_f32, k, self._radius)
+        return indices.to(torch.int64), dist2
