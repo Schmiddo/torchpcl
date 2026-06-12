@@ -16,6 +16,16 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# nvcc/cccl pinned to the same minor as torch's bundled CUDA runtime
+# (mixed minors in the shared nvidia/cu13 tree fail CCCL's version check).
+cubql = [
+    "ninja>=1.11",
+    "nvidia-cuda-nvcc~=13.0.0",
+    "nvidia-cuda-cccl~=13.0.0",
+    "nvidia-cuda-runtime~=13.0.0",
+    "nvidia-cuda-crt~=13.0.0",
+    "nvidia-nvvm~=13.0.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

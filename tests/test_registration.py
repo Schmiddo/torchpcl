@@ -10,7 +10,7 @@ from torchpcl import (
 )
 from torchpcl.transforms import transform_points
 
-from conftest import random_cloud, random_rigid_transform
+from conftest import cubql_skip_reason, random_cloud, random_rigid_transform
 
 
 def test_icp_point_to_point_recovers_transform(device):
@@ -119,6 +119,31 @@ def test_evaluate_registration_identity_default(device):
     points = random_cloud(100, device, seed=0)
     result = evaluate_registration(points, points, 0.01)
     assert result.fitness == pytest.approx(1.0)
+
+
+def test_icp_unknown_backend_raises(device):
+    points = random_cloud(10, device, seed=0)
+    with pytest.raises(ValueError, match="unknown backend"):
+        icp(points, points, 0.1, backend="kdtree")
+
+
+def test_icp_cubql_backend_recovers_transform():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    if (reason := cubql_skip_reason()) is not None:
+        pytest.skip(reason)
+    device = torch.device("cuda")
+    target = random_cloud(1000, device, seed=0)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=device)
+    source = transform_points(target, torch.linalg.inv(gt))
+
+    result = icp(source, target, max_correspondence_distance=0.1, backend="cubql")
+    assert result.converged
+    assert result.fitness == pytest.approx(1.0)
+    assert torch.allclose(result.transformation, gt, atol=1e-5)
+
+    evaluated = evaluate_registration(source, target, 0.1, gt, backend="cubql")
+    assert evaluated.fitness == pytest.approx(1.0)
 
 
 def test_icp_float32_input(device):

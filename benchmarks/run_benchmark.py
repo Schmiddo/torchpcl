@@ -62,7 +62,7 @@ def preprocess(args):
     return source, target, t_gt
 
 
-def bench_torchpcl(rows, source, target, t_gt, args, device):
+def bench_torchpcl(rows, source, target, t_gt, args, device, backend="warp"):
     src = torch.from_numpy(source.points()[:, :3]).to(device)
     tgt = torch.from_numpy(target.points()[:, :3]).to(device)
     normals = torch.from_numpy(target.normals()[:, :3]).to(device)
@@ -78,14 +78,15 @@ def bench_torchpcl(rows, source, target, t_gt, args, device):
     for name, kwargs in methods.items():
         result, seconds = timed(
             lambda kwargs=kwargs: torchpcl.icp(
-                src, tgt, args.max_corr_dist, criteria=criteria, **kwargs
+                src, tgt, args.max_corr_dist,
+                criteria=criteria, backend=backend, **kwargs
             ),
             args.repeats,
             sync=sync,
         )
         rot_err, trans_err = pose_errors(result.transformation.cpu().numpy(), t_gt)
         rows.append((
-            f"torchpcl {name} [{device.type}]",
+            f"torchpcl {name} [{device.type},{backend}]",
             seconds, rot_err, trans_err, result.num_iterations, result.converged,
         ))
 
@@ -174,6 +175,11 @@ def main():
     rows = []
     for device in devices:
         bench_torchpcl(rows, source, target, t_gt, args, device)
+        if device.type == "cuda":
+            try:
+                bench_torchpcl(rows, source, target, t_gt, args, device, backend="cubql")
+            except Exception as exc:
+                print(f"cubql backend unavailable -- skipping ({exc})")
     bench_small_gicp(rows, source, target, t_gt, args)
     bench_open3d(rows, source, target, t_gt, args)
 

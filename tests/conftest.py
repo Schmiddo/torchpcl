@@ -1,7 +1,26 @@
+import functools
+
 import pytest
 import torch
 
 _DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@functools.cache
+def cubql_skip_reason() -> str | None:
+    """None if the cubql backend is usable, else a skip reason.
+
+    Cached so the JIT compile (or its failure) happens once per session.
+    """
+    if not torch.cuda.is_available():
+        return "CUDA not available"
+    try:
+        from torchpcl.search_cubql import _load_extension
+
+        _load_extension()
+    except Exception as exc:  # noqa: BLE001 - any build failure means skip
+        return f"cubql backend unavailable: {exc}"
+    return None
 
 
 @pytest.fixture(params=_DEVICES)

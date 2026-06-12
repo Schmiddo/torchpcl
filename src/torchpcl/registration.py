@@ -10,6 +10,16 @@ from .transforms import _check_points, transform_points
 from .types import ICPConvergenceCriteria, RegistrationResult
 
 
+def _make_nns(points: torch.Tensor, radius: float, backend: str):
+    if backend == "warp":
+        return NearestNeighborSearch(points, radius)
+    if backend == "cubql":
+        from .search_cubql import CuBQLNearestNeighborSearch
+
+        return CuBQLNearestNeighborSearch(points, radius)
+    raise ValueError(f"unknown backend {backend!r}, expected 'warp' or 'cubql'")
+
+
 def _evaluate(
     nns: NearestNeighborSearch,
     points: torch.Tensor,
@@ -80,6 +90,7 @@ def icp(
     estimation: TransformationEstimation | None = None,
     criteria: ICPConvergenceCriteria = ICPConvergenceCriteria(),
     target_normals: torch.Tensor | None = None,
+    backend: str = "warp",
 ) -> RegistrationResult:
     """Register source to target with single-scale ICP.
 
@@ -91,6 +102,8 @@ def icp(
         estimation: Transformation estimation method (default PointToPoint).
         criteria: Convergence criteria.
         target_normals: (M, 3) target normals, required for PointToPlane.
+        backend: Correspondence search backend, "warp" (default, CPU+CUDA)
+            or "cubql" (experimental, CUDA-only, JIT-compiled).
 
     Note: if at any iteration no correspondences are found, the current
     transformation is kept and the result has converged=False, fitness=0
@@ -108,7 +121,7 @@ def icp(
     else:
         transformation = torch.eye(4, dtype=torch.float64, device=device)
 
-    nns = NearestNeighborSearch(target64, max_correspondence_distance)
+    nns = _make_nns(target64, max_correspondence_distance, backend)
     current = transform_points(source64, transformation)
 
     prev_fitness = 0.0
@@ -156,6 +169,8 @@ def evaluate_registration(
     target: torch.Tensor,
     max_correspondence_distance: float,
     transformation: torch.Tensor | None = None,
+    *,
+    backend: str = "warp",
 ) -> RegistrationResult:
     """Compute fitness/inlier RMSE of a transformation without iterating."""
     _check_points(source, "source")
@@ -172,6 +187,6 @@ def evaluate_registration(
     else:
         transformation = torch.eye(4, dtype=torch.float64, device=source.device)
 
-    nns = NearestNeighborSearch(target64, max_correspondence_distance)
+    nns = _make_nns(target64, max_correspondence_distance, backend)
     result, _ = _evaluate(nns, transform_points(source64, transformation), transformation)
     return result

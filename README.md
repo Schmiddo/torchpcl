@@ -54,6 +54,29 @@ uv run pytest -q
 
 Tests run on CPU and, when available, CUDA.
 
+### cuBQL backend (experimental, CUDA-only)
+
+Correspondence search defaults to a warp hash grid (`backend="warp"`,
+CPU + CUDA). An alternative BVH-based backend built on
+[cuBQL](https://github.com/NVIDIA/cuBQL) is available on CUDA:
+
+```python
+result = tp.icp(source, target, 0.1, backend="cubql")
+```
+
+It requires a dev checkout (cuBQL headers under `third_party/cuBQL`,
+or `TORCHPCL_CUBQL_DIR`) and the JIT toolchain:
+
+```bash
+uv sync --group cubql   # pip-shipped nvcc/cccl pinned to torch's CUDA minor
+```
+
+The first call compiles the extension with `torch.utils.cpp_extension`
+(cached afterwards). The build targets only the local GPU architecture;
+set `TORCHPCL_CUDA_ARCH_LIST` to override. If a system CUDA toolkit
+matching `torch.version.cuda`'s major version is installed, setting
+`CUDA_HOME` to it works as an alternative to the pip toolchain.
+
 ### Benchmark
 
 `benchmarks/run_benchmark.py` registers the sample scans in `data/`
