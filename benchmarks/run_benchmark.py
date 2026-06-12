@@ -163,10 +163,9 @@ def main():
           f"(voxel {args.voxel}), max_corr_dist {args.max_corr_dist}, "
           f"max_iters {args.max_iters}, median of {args.repeats} runs\n")
 
-    # torchpcl is CUDA-only.
-    devices = [torch.device("cuda")] if torch.cuda.is_available() else []
-    if not devices:
-        print("CUDA not available -- skipping torchpcl rows")
+    devices = [torch.device("cpu")]
+    if torch.cuda.is_available():
+        devices.append(torch.device("cuda"))
 
     rows = []
     for device in devices:

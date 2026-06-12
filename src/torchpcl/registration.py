@@ -49,10 +49,6 @@ def _validate_inputs(
     _check_points(target, "target")
     if len(source) == 0 or len(target) == 0:
         raise ValueError("source and target must be non-empty")
-    if source.device.type != "cuda":
-        raise RuntimeError(
-            f"torchpcl registration is CUDA-only; got points on '{source.device}'"
-        )
     if source.device != target.device:
         raise ValueError(
             f"source and target must be on the same device, "
@@ -85,7 +81,7 @@ def icp(
     criteria: ICPConvergenceCriteria = ICPConvergenceCriteria(),
     target_normals: torch.Tensor | None = None,
 ) -> RegistrationResult:
-    """Register source to target with single-scale ICP (CUDA tensors).
+    """Register source to target with single-scale ICP.
 
     Args:
         source: (N, 3) source points.

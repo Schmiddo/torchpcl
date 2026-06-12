@@ -16,9 +16,9 @@ def brute_force_nn(queries: torch.Tensor, points: torch.Tensor, radius: float):
     return idx, dist2, valid
 
 
-def test_matches_brute_force(cuda_device):
-    points = random_cloud(2000, cuda_device, seed=0)
-    queries = random_cloud(500, cuda_device, seed=1)
+def test_matches_brute_force(search_device):
+    points = random_cloud(2000, search_device, seed=0)
+    queries = random_cloud(500, search_device, seed=1)
     radius = 0.05
 
     nns = NearestNeighborSearch(points, radius)
@@ -34,48 +34,48 @@ def test_matches_brute_force(cuda_device):
     )
 
 
-def test_out_of_radius_returns_minus_one(cuda_device):
-    points = torch.zeros(1, 3, dtype=torch.float64, device=cuda_device)
+def test_out_of_radius_returns_minus_one(search_device):
+    points = torch.zeros(1, 3, dtype=torch.float64, device=search_device)
     queries = torch.tensor(
-        [[1.0, 0.0, 0.0], [0.005, 0.0, 0.0]], dtype=torch.float64, device=cuda_device
+        [[1.0, 0.0, 0.0], [0.005, 0.0, 0.0]], dtype=torch.float64, device=search_device
     )
     nns = NearestNeighborSearch(points, 0.01)
     idx, _ = nns.query(queries)
     assert idx.tolist() == [-1, 0]
 
 
-def test_exact_match_found(cuda_device):
-    points = random_cloud(100, cuda_device, seed=2)
+def test_exact_match_found(search_device):
+    points = random_cloud(100, search_device, seed=2)
     nns = NearestNeighborSearch(points, 0.01)
     idx, dist2 = nns.query(points)
-    assert (idx == torch.arange(100, device=cuda_device)).all()
+    assert (idx == torch.arange(100, device=search_device)).all()
     assert (dist2 == 0).all()
 
 
-def test_boundary_distance(cuda_device):
+def test_boundary_distance(search_device):
     # A point just inside the radius is found, just outside is not.
-    points = torch.zeros(1, 3, dtype=torch.float64, device=cuda_device)
+    points = torch.zeros(1, 3, dtype=torch.float64, device=search_device)
     radius = 0.1
     queries = torch.tensor(
         [[radius * 0.999, 0.0, 0.0], [radius * 1.001, 0.0, 0.0]],
         dtype=torch.float64,
-        device=cuda_device,
+        device=search_device,
     )
     nns = NearestNeighborSearch(points, radius)
     idx, _ = nns.query(queries)
     assert idx.tolist() == [0, -1]
 
 
-def test_unbounded_query(cuda_device):
-    points = random_cloud(100, cuda_device, seed=3) + 100.0
-    queries = random_cloud(10, cuda_device, seed=4)
+def test_unbounded_query(search_device):
+    points = random_cloud(100, search_device, seed=3) + 100.0
+    queries = random_cloud(10, search_device, seed=4)
     idx, _ = NearestNeighborSearch(points, math.inf).query(queries)
     assert (idx >= 0).all()
 
 
-def test_knn_query_matches_brute_force(cuda_device):
-    points = random_cloud(1000, cuda_device, seed=0)
-    queries = random_cloud(200, cuda_device, seed=1)
+def test_knn_query_matches_brute_force(search_device):
+    points = random_cloud(1000, search_device, seed=0)
+    queries = random_cloud(200, search_device, seed=1)
     radius, k = 0.1, 5
 
     idx, dist2 = NearestNeighborSearch(points, radius).knn_query(queries, k)
@@ -96,9 +96,9 @@ def test_knn_query_matches_brute_force(cuda_device):
     assert (diffs[torch.isfinite(diffs)] >= -1e-7).all()
 
 
-def test_knn_unbounded(cuda_device):
-    points = random_cloud(1000, cuda_device, seed=0)
-    queries = random_cloud(200, cuda_device, seed=1)
+def test_knn_unbounded(search_device):
+    points = random_cloud(1000, search_device, seed=0)
+    queries = random_cloud(200, search_device, seed=1)
     k = 8
     idx, dist2 = NearestNeighborSearch(points, math.inf).knn_query(queries, k)
     assert (idx >= 0).all()  # unbounded: k neighbors always found
@@ -108,7 +108,7 @@ def test_knn_unbounded(cuda_device):
     assert torch.allclose(dist2.to(torch.float64), ref_d, atol=1e-5)
 
 
-def test_cpu_points_rejected():
+def test_unsupported_device_rejected():
     points = torch.zeros(10, 3)
-    with pytest.raises(RuntimeError, match="CUDA-only"):
-        NearestNeighborSearch(points, 0.1)
+    with pytest.raises(RuntimeError, match="unsupported device"):
+        NearestNeighborSearch(points.to("meta"), 0.1)

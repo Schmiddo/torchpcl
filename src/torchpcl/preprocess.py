@@ -56,7 +56,7 @@ def estimate_normals(
     k: int = 30,
     viewpoint: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Estimate per-point normals from local covariance (CUDA tensors).
+    """Estimate per-point normals from local covariance.
 
     For each point, up to ``k`` nearest neighbors are gathered (within
     ``radius`` if given, unbounded true k-NN otherwise) and the normal is

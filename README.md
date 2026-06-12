@@ -5,21 +5,27 @@ Minimal point cloud registration and processing library built on
 [cuBQL](https://github.com/NVIDIA/cuBQL) (GPU BVH build and queries),
 reimplementing the core of Open3D's ICP registration pipeline.
 
-**CUDA-only**: all spatial search (ICP correspondences, k-NN for
-normals, metric distances) runs on a GPU-built BVH. The CUDA extension
-is JIT-compiled on first use (cached afterwards), so torchpcl requires a
-dev checkout with `third_party/cuBQL` and an nvcc toolchain — both
-provided by the repository:
+All spatial search (ICP correspondences, k-NN for normals, metric
+distances) runs on a cuBQL BVH, on **both CPU and CUDA**: the same
+traversal code is compiled as a CUDA extension for GPU tensors and as a
+plain C++ extension (parallelized over torch's intra-op thread pool)
+for CPU tensors. Extensions are JIT-compiled on first use (cached
+afterwards), so torchpcl requires a dev checkout with
+`third_party/cuBQL`:
 
 ```bash
 git submodule update --init third_party/cuBQL
 uv sync   # installs torch plus the pip nvcc/CCCL toolchain (pinned to torch's CUDA minor)
 ```
 
-The build targets only the local GPU architecture; set
+The CPU extension needs only a C++ compiler and ninja; the CUDA
+extension additionally needs the nvcc toolchain installed by `uv sync`.
+The CUDA build targets only the local GPU architecture; set
 `TORCHPCL_CUDA_ARCH_LIST` to override, `TORCHPCL_CUBQL_DIR` to point at
 an external cuBQL checkout, or `CUDA_HOME` at a system toolkit matching
-`torch.version.cuda`'s major version.
+`torch.version.cuda`'s major version. CPU and CUDA may tie-break
+equidistant neighbors differently; compare poses and metrics across
+devices, not correspondence indices.
 
 ## Usage
 
@@ -27,7 +33,7 @@ an external cuBQL checkout, or `CUDA_HOME` at a system toolkit matching
 import torch
 import torchpcl as tp
 
-source = torch.randn(10_000, 3, device="cuda")   # (N, 3)
+source = torch.randn(10_000, 3, device="cuda")   # (N, 3); CPU works too
 target = ...                                     # (M, 3), same device
 
 # Point-to-point (default)
@@ -59,8 +65,7 @@ normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...)
 # reference->prediction; chamfer = accuracy + completion)
 m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
-# backend="torch": exact chunked brute force, works on CPU tensors
-# (orders of magnitude slower for large clouds)
+# backend="torch": exact chunked brute force reference implementation
 ```
 
 Points are processed in the input precision (float32 recommended); only
@@ -79,7 +84,8 @@ transformation and returns `converged=False, fitness=0`.
 
 ```bash
 uv sync
-uv run pytest -q   # requires a CUDA GPU; first run JIT-compiles the extension
+uv run pytest -q   # first run JIT-compiles the extensions; CUDA tests
+                   # skip automatically on machines without a GPU
 ```
 
 ### Benchmark
@@ -102,8 +108,7 @@ search-structure build and the full registration from identity.
 `tests/test_open3d_crosscheck.py` compares results against
 `open3d.pipelines.registration.registration_icp` on identical inputs and
 skips when open3d is not importable. open3d has no Python 3.14 wheels
-yet, so run it from a Python ≤3.12 environment with a CUDA build of
-torch, e.g.:
+yet, so run it from a Python ≤3.12 environment, e.g.:
 
 ```bash
 uv venv -p 3.12 /tmp/o3d-venv

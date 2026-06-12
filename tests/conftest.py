@@ -15,28 +15,33 @@ def device(request):
 
 
 @functools.cache
-def cubql_skip_reason() -> str | None:
-    """None if the CUDA extension is usable, else a skip reason.
-
-    Cached so the JIT compile (or its failure) happens once per session.
+def extension_skip_reason(device_type: str) -> str | None:
+    """None if the search extension for device_type is usable, else a
+    skip reason. Cached so each JIT compile (or its failure) happens
+    once per session.
     """
-    if not torch.cuda.is_available():
-        return "CUDA not available"
     try:
-        from torchpcl.search import _load_extension
+        if device_type == "cuda":
+            if not torch.cuda.is_available():
+                return "CUDA not available"
+            from torchpcl.search import _load_cuda_extension
 
-        _load_extension()
+            _load_cuda_extension()
+        else:
+            from torchpcl.search import _load_cpu_extension
+
+            _load_cpu_extension()
     except Exception as exc:  # noqa: BLE001 - any build failure means skip
-        return f"torchpcl CUDA extension unavailable: {exc}"
+        return f"torchpcl {device_type} extension unavailable: {exc}"
     return None
 
 
-@pytest.fixture
-def cuda_device():
-    """CUDA device with a working torchpcl extension, or skip."""
-    if (reason := cubql_skip_reason()) is not None:
+@pytest.fixture(params=_DEVICES)
+def search_device(request):
+    """Device with a working torchpcl search extension, or skip."""
+    if (reason := extension_skip_reason(request.param)) is not None:
         pytest.skip(reason)
-    return torch.device("cuda")
+    return torch.device(request.param)
 
 
 def random_cloud(n: int, device, scale: float = 1.0, seed: int | None = None) -> torch.Tensor:

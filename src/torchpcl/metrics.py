@@ -78,9 +78,9 @@ def point_cloud_metrics(
         prediction: (N, 3) predicted / reconstructed points.
         reference: (M, 3) reference (ground-truth) points, same device.
         threshold: Inlier distance for precision/recall/F1.
-        backend: "cubql" (default, BVH search, CUDA-only) or "torch"
-            (exact chunked brute force; works on CPU tensors but is
-            orders of magnitude slower for large clouds).
+        backend: "cubql" (default, BVH search, CPU+CUDA) or "torch"
+            (exact chunked brute force; orders of magnitude slower for
+            large clouds).
 
     Returns:
         PointCloudMetrics; distances are in the input units.

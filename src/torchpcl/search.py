@@ -1,9 +1,12 @@
-"""cuBQL-backed nearest-neighbor search (CUDA).
+"""cuBQL-backed nearest-neighbor search (CPU and CUDA).
 
-torchpcl's spatial queries run on a GPU-built BVH (third_party/cuBQL).
-The CUDA extension is JIT-compiled on first use and cached by torch;
-torchpcl therefore requires a dev checkout with the cuBQL headers and an
-nvcc toolchain (installed via the project dependencies).
+torchpcl's spatial queries run on a cuBQL BVH (third_party/cuBQL). Both
+backends use the same traversal code: a CUDA extension on GPU and a
+plain C++ extension (parallelized over the intra-op thread pool) on
+CPU. Extensions are JIT-compiled on first use and cached by torch;
+torchpcl therefore requires a dev checkout with the cuBQL headers, a
+C++ compiler, and -- for the CUDA path -- the nvcc toolchain installed
+via the project dependencies.
 """
 
 import functools
@@ -13,6 +16,7 @@ from pathlib import Path
 import torch
 
 _EXT_NAME = "torchpcl_cubql"
+_CPU_EXT_NAME = "torchpcl_cubql_cpu"
 
 
 def _find_cubql_root() -> Path:
@@ -75,11 +79,11 @@ def _cudart_shim_dir(cuda_home: Path) -> Path:
 
 
 @functools.cache
-def _load_extension():
+def _load_cuda_extension():
     if not torch.cuda.is_available():
-        raise RuntimeError("torchpcl requires a CUDA device")
+        raise RuntimeError("no CUDA device available for the CUDA search extension")
     if torch.version.cuda is None:
-        raise RuntimeError("torchpcl requires a CUDA build of torch")
+        raise RuntimeError("the CUDA search extension requires a CUDA build of torch")
 
     cubql_root = _find_cubql_root()
     cuda_home = _find_cuda_home()
@@ -120,22 +124,52 @@ def _load_extension():
     )
 
 
+@functools.cache
+def _load_cpu_extension():
+    cubql_root = _find_cubql_root()
+
+    from torch.utils import cpp_extension
+
+    if not cpp_extension.is_ninja_available():
+        raise RuntimeError(
+            "ninja is required to build the torchpcl extension; "
+            "install it with `uv sync`"
+        )
+
+    sources = [str(Path(__file__).resolve().parent / "csrc" / "cubql_search_cpu.cpp")]
+    # -fopenmp is required for at::parallel_for to actually parallelize:
+    # ATen's OpenMP backend is header-inline, so without the flag the
+    # pragmas vanish and queries run single-threaded.
+    return cpp_extension.load(
+        name=_CPU_EXT_NAME,
+        sources=sources,
+        extra_include_paths=[str(cubql_root)],
+        extra_cflags=["-O3", "-fopenmp"],
+        extra_ldflags=["-fopenmp"],
+    )
+
+
 class NearestNeighborSearch:
-    """1-NN search within a fixed radius over a static point set (CUDA).
+    """1-NN search within a fixed radius over a static point set.
 
     Matches Open3D's hybrid search semantics: for each query point, the
     nearest point within ``radius``, or -1 if none exists. The radius may
-    be ``math.inf`` for unbounded search.
+    be ``math.inf`` for unbounded search. The BVH lives on the device of
+    ``points`` (CPU or CUDA); queries must be on the same device.
     """
 
     def __init__(self, points: torch.Tensor, radius: float):
-        if points.device.type != "cuda":
-            raise RuntimeError(
-                f"torchpcl spatial search is CUDA-only; got points on '{points.device}'"
-            )
         self._radius = float(radius)
         self._points_f32 = points.to(torch.float32).contiguous()
-        self._bvh = _load_extension().PointBVH(self._points_f32)
+        if points.device.type == "cuda":
+            ext = _load_cuda_extension()
+        elif points.device.type == "cpu":
+            ext = _load_cpu_extension()
+        else:
+            raise RuntimeError(
+                f"unsupported device '{points.device}' for torchpcl spatial search"
+            )
+        self._bvh = ext.PointBVH(self._points_f32)
 
     def query(self, queries: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (indices, dist2) per query point; index -1 = no neighbor

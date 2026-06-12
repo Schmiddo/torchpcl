@@ -13,9 +13,9 @@ from torchpcl.transforms import transform_points
 from conftest import random_cloud, random_rigid_transform
 
 
-def test_icp_point_to_point_recovers_transform(cuda_device):
-    target = random_cloud(1000, cuda_device, seed=0)
-    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=cuda_device)
+def test_icp_point_to_point_recovers_transform(search_device):
+    target = random_cloud(1000, search_device, seed=0)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=search_device)
     source = transform_points(target, torch.linalg.inv(gt))
 
     result = icp(source, target, max_correspondence_distance=0.1)
@@ -35,10 +35,10 @@ def _random_normals(n, device, seed):
     return (normals / normals.norm(dim=1, keepdim=True)).to(device)
 
 
-def test_icp_point_to_plane_recovers_transform(cuda_device):
-    target = random_cloud(2000, cuda_device, seed=0)
-    normals = _random_normals(2000, cuda_device, seed=2)
-    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=cuda_device)
+def test_icp_point_to_plane_recovers_transform(search_device):
+    target = random_cloud(2000, search_device, seed=0)
+    normals = _random_normals(2000, search_device, seed=2)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=search_device)
     source = transform_points(target, torch.linalg.inv(gt))
 
     result = icp(
@@ -53,23 +53,23 @@ def test_icp_point_to_plane_recovers_transform(cuda_device):
     assert torch.allclose(result.transformation, gt, atol=1e-4)
 
 
-def test_icp_disjoint_clouds(cuda_device):
-    source = random_cloud(100, cuda_device, seed=0)
-    target = random_cloud(100, cuda_device, seed=1) + 100.0
+def test_icp_disjoint_clouds(search_device):
+    source = random_cloud(100, search_device, seed=0)
+    target = random_cloud(100, search_device, seed=1) + 100.0
 
     result = icp(source, target, max_correspondence_distance=0.1)
     assert not result.converged
     assert result.fitness == 0.0
     assert result.num_iterations == 0
     assert torch.allclose(
-        result.transformation, torch.eye(4, dtype=torch.float64, device=cuda_device)
+        result.transformation, torch.eye(4, dtype=torch.float64, device=search_device)
     )
     assert (result.correspondences == -1).all()
 
 
-def test_icp_max_iteration_respected(cuda_device):
-    target = random_cloud(500, cuda_device, seed=0)
-    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=cuda_device)
+def test_icp_max_iteration_respected(search_device):
+    target = random_cloud(500, search_device, seed=0)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=search_device)
     source = transform_points(target, torch.linalg.inv(gt))
 
     result = icp(
@@ -82,9 +82,9 @@ def test_icp_max_iteration_respected(cuda_device):
     assert not result.converged
 
 
-def test_icp_with_init(cuda_device):
-    target = random_cloud(500, cuda_device, seed=0)
-    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=cuda_device)
+def test_icp_with_init(search_device):
+    target = random_cloud(500, search_device, seed=0)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=search_device)
     source = transform_points(target, torch.linalg.inv(gt))
 
     result = icp(source, target, max_correspondence_distance=0.1, init=gt)
@@ -92,44 +92,38 @@ def test_icp_with_init(cuda_device):
     assert torch.allclose(result.transformation, gt, atol=1e-5)
 
 
-def test_icp_validates_normals_requirement(cuda_device):
-    points = random_cloud(10, cuda_device, seed=0)
+def test_icp_validates_normals_requirement(search_device):
+    points = random_cloud(10, search_device, seed=0)
     with pytest.raises(ValueError, match="requires target_normals"):
         icp(points, points, 0.1, estimation=PointToPlane())
 
 
-def test_icp_validates_distance(cuda_device):
-    points = random_cloud(10, cuda_device, seed=0)
+def test_icp_validates_distance(search_device):
+    points = random_cloud(10, search_device, seed=0)
     with pytest.raises(ValueError, match="positive"):
         icp(points, points, 0.0)
 
 
-def test_evaluate_registration_ground_truth(cuda_device):
-    target = random_cloud(500, cuda_device, seed=0)
-    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=cuda_device)
+def test_evaluate_registration_ground_truth(search_device):
+    target = random_cloud(500, search_device, seed=0)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=search_device)
     source = transform_points(target, torch.linalg.inv(gt))
 
     result = evaluate_registration(source, target, 0.05, gt)
     assert result.fitness == pytest.approx(1.0)
     assert result.inlier_rmse == pytest.approx(0.0, abs=1e-6)
-    assert (result.correspondences == torch.arange(500, device=cuda_device)).all()
+    assert (result.correspondences == torch.arange(500, device=search_device)).all()
 
 
-def test_evaluate_registration_identity_default(cuda_device):
-    points = random_cloud(100, cuda_device, seed=0)
+def test_evaluate_registration_identity_default(search_device):
+    points = random_cloud(100, search_device, seed=0)
     result = evaluate_registration(points, points, 0.01)
     assert result.fitness == pytest.approx(1.0)
 
 
-def test_icp_cpu_points_rejected():
-    points = torch.rand(10, 3, dtype=torch.float64)
-    with pytest.raises(RuntimeError, match="CUDA-only"):
-        icp(points, points, 0.1)
-
-
-def test_icp_float32_input(cuda_device):
-    target = random_cloud(500, cuda_device, seed=0).to(torch.float32)
-    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=cuda_device)
+def test_icp_float32_input(search_device):
+    target = random_cloud(500, search_device, seed=0).to(torch.float32)
+    gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=search_device)
     source = transform_points(target, torch.linalg.inv(gt).to(torch.float32))
 
     result = icp(source, target, max_correspondence_distance=0.1)

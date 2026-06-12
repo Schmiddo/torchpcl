@@ -28,8 +28,8 @@ def _to_o3d(points: torch.Tensor, normals: torch.Tensor | None = None):
 
 
 @pytest.mark.parametrize("estimation_name", ["point_to_point", "point_to_plane"])
-def test_matches_open3d(estimation_name, cuda_device):
-    device = cuda_device
+def test_matches_open3d(estimation_name, search_device):
+    device = search_device
     target = random_cloud(1000, device, seed=0)
     if estimation_name == "point_to_plane":
         gen = torch.Generator().manual_seed(2)
