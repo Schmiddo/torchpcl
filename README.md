@@ -54,6 +54,21 @@ uv run pytest -q
 
 Tests run on CPU and, when available, CUDA.
 
+### Benchmark
+
+`benchmarks/run_benchmark.py` registers the sample scans in `data/`
+(source/target + ground-truth `T_target_source.txt`) and reports pose
+error and wall time for torchpcl (CPU and CUDA), small_gicp, and open3d
+when importable:
+
+```bash
+uv run python benchmarks/run_benchmark.py [--voxel 0.25] [--repeats 5]
+```
+
+Both clouds are voxel-downsampled and normals are estimated once,
+shared by all methods; each timed run includes the library's own
+search-structure build and the full registration from identity.
+
 ### Cross-check against Open3D
 
 `tests/test_open3d_crosscheck.py` compares results against
