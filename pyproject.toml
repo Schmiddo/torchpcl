@@ -4,10 +4,19 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
+# nvcc/cccl pinned to the same minor as torch's bundled CUDA runtime
+# (mixed minors in the shared nvidia/cu13 tree fail CCCL's version check).
+# They are required: torchpcl JIT-compiles its cuBQL CUDA extension.
 dependencies = [
+    "numpy>=2",
     "small-gicp",
     "torch>=2.12.0",
-    "warp-lang>=1.14.0",
+    "ninja>=1.11",
+    "nvidia-cuda-nvcc~=13.0.0",
+    "nvidia-cuda-cccl~=13.0.0",
+    "nvidia-cuda-runtime~=13.0.0",
+    "nvidia-cuda-crt~=13.0.0",
+    "nvidia-nvvm~=13.0.0",
 ]
 
 [build-system]
@@ -16,16 +25,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = ["pytest>=8"]
-# nvcc/cccl pinned to the same minor as torch's bundled CUDA runtime
-# (mixed minors in the shared nvidia/cu13 tree fail CCCL's version check).
-cubql = [
-    "ninja>=1.11",
-    "nvidia-cuda-nvcc~=13.0.0",
-    "nvidia-cuda-cccl~=13.0.0",
-    "nvidia-cuda-runtime~=13.0.0",
-    "nvidia-cuda-crt~=13.0.0",
-    "nvidia-nvvm~=13.0.0",
-]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

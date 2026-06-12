@@ -55,29 +55,26 @@ def estimate_normals(
     *,
     k: int = 30,
     viewpoint: torch.Tensor | None = None,
-    backend: str = "warp",
 ) -> torch.Tensor:
-    """Estimate per-point normals from local covariance.
+    """Estimate per-point normals from local covariance (CUDA tensors).
 
-    For each point, up to ``k`` nearest neighbors within ``radius`` are
-    gathered (hybrid search, like the ICP correspondence search) and the
-    normal is the eigenvector of the neighborhood covariance with the
-    smallest eigenvalue.
+    For each point, up to ``k`` nearest neighbors are gathered (within
+    ``radius`` if given, unbounded true k-NN otherwise) and the normal is
+    the eigenvector of the neighborhood covariance with the smallest
+    eigenvalue.
 
     Args:
         points: (N, 3) point cloud.
-        radius: Neighbor search radius. Required for the warp backend
-            (hash-grid search); optional for cubql, where ``None`` means
-            unbounded (true) k-NN.
-        k: Maximum number of neighbors per point (cubql caps k at 64).
+        radius: Optional neighbor search radius; ``None`` means unbounded
+            k-NN.
+        k: Maximum number of neighbors per point (capped at 64).
         viewpoint: Optional (3,) location; normals are flipped to point
             towards it. Without it the sign of each normal is arbitrary
             (which is fine for point-to-plane ICP).
-        backend: "warp" (default, CPU+CUDA) or "cubql" (CUDA-only).
 
     Returns:
         (N, 3) unit normals in the input dtype. Points with fewer than 3
-        neighbors inside the radius get a zero normal.
+        neighbors get a zero normal.
     """
     _check_points(points, "points")
     if radius is not None and radius <= 0:
@@ -85,19 +82,7 @@ def estimate_normals(
     if k < 3:
         raise ValueError("k must be at least 3")
 
-    if backend == "warp":
-        if radius is None:
-            raise ValueError(
-                "radius is required with the warp backend (hash-grid "
-                "search); use backend='cubql' for unbounded k-NN"
-            )
-        nns = NearestNeighborSearch(points, radius)
-    elif backend == "cubql":
-        from .search_cubql import CuBQLNearestNeighborSearch
-
-        nns = CuBQLNearestNeighborSearch(points, math.inf if radius is None else radius)
-    else:
-        raise ValueError(f"unknown backend {backend!r}, expected 'warp' or 'cubql'")
+    nns = NearestNeighborSearch(points, math.inf if radius is None else radius)
     indices, _ = nns.knn_query(points, k)
     valid = indices >= 0
     counts = valid.sum(dim=1)

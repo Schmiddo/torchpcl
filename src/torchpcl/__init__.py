@@ -1,4 +1,4 @@
-"""Minimal ICP registration pipeline built on torch and warp."""
+"""Point cloud registration and processing built on torch and cuBQL (CUDA)."""
 
 from .estimation import PointToPlane, PointToPoint, TransformationEstimation
 from .metrics import PointCloudMetrics, point_cloud_metrics

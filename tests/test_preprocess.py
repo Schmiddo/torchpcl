@@ -3,69 +3,44 @@ import torch
 
 from torchpcl import estimate_normals, voxel_downsample
 
-from conftest import cubql_skip_reason, random_cloud
+from conftest import random_cloud
 
 
-def _require_cubql():
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    if (reason := cubql_skip_reason()) is not None:
-        pytest.skip(reason)
-
-
-def test_normals_cubql_unbounded():
-    _require_cubql()
+def test_normals_unbounded_default(cuda_device):
+    # Without a radius the neighborhood is true (unbounded) k-NN.
     gen = torch.Generator().manual_seed(0)
     xy = torch.rand((2000, 2), generator=gen, dtype=torch.float64)
-    points = torch.cat([xy, torch.zeros(2000, 1, dtype=torch.float64)], dim=1).cuda()
+    points = torch.cat([xy, torch.zeros(2000, 1, dtype=torch.float64)], dim=1).to(cuda_device)
 
-    normals = estimate_normals(points, k=20, backend="cubql")  # no radius
+    normals = estimate_normals(points, k=20)
     assert torch.allclose(
-        normals[:, 2].abs(), torch.ones(2000, dtype=torch.float64, device="cuda"), atol=1e-6
+        normals[:, 2].abs(),
+        torch.ones(2000, dtype=torch.float64, device=cuda_device),
+        atol=1e-6,
     )
 
 
-def test_normals_backends_agree():
-    _require_cubql()
-    gen = torch.Generator().manual_seed(1)
-    points = torch.randn((5000, 3), generator=gen, dtype=torch.float64)
-    points = (points / points.norm(dim=1, keepdim=True)).cuda()
-
-    warp_n = estimate_normals(points, radius=0.2, k=20, backend="warp")
-    cubql_n = estimate_normals(points, radius=0.2, k=20, backend="cubql")
-    alignment = (warp_n * cubql_n).sum(dim=1).abs()
-    # Same hybrid semantics; tie-breaks may differ on a few neighborhoods.
-    assert float(alignment.median()) > 0.9999
-    assert float((alignment > 0.99).double().mean()) > 0.99
+def test_normals_cpu_rejected():
+    points = torch.rand(10, 3, dtype=torch.float64)
+    with pytest.raises(RuntimeError, match="CUDA-only"):
+        estimate_normals(points, radius=0.1)
 
 
-def test_normals_unknown_backend(device):
-    points = random_cloud(10, device, seed=0)
-    with pytest.raises(ValueError, match="unknown backend"):
-        estimate_normals(points, radius=0.1, backend="kdtree")
-
-
-def test_normals_warp_requires_radius(device):
-    points = random_cloud(10, device, seed=0)
-    with pytest.raises(ValueError, match="radius is required"):
-        estimate_normals(points)
-
-
-def test_normals_on_plane(device):
+def test_normals_on_plane(cuda_device):
     gen = torch.Generator().manual_seed(0)
     xy = torch.rand((2000, 2), generator=gen, dtype=torch.float64)
-    points = torch.cat([xy, torch.zeros(2000, 1, dtype=torch.float64)], dim=1).to(device)
+    points = torch.cat([xy, torch.zeros(2000, 1, dtype=torch.float64)], dim=1).to(cuda_device)
 
     normals = estimate_normals(points, radius=0.1, k=20)
     assert normals.shape == points.shape
-    assert torch.allclose(normals[:, 2].abs(), torch.ones(2000, dtype=torch.float64, device=device), atol=1e-6)
-    assert torch.allclose(normals.norm(dim=1), torch.ones(2000, dtype=torch.float64, device=device), atol=1e-6)
+    assert torch.allclose(normals[:, 2].abs(), torch.ones(2000, dtype=torch.float64, device=cuda_device), atol=1e-6)
+    assert torch.allclose(normals.norm(dim=1), torch.ones(2000, dtype=torch.float64, device=cuda_device), atol=1e-6)
 
 
-def test_normals_on_sphere(device):
+def test_normals_on_sphere(cuda_device):
     gen = torch.Generator().manual_seed(1)
     points = torch.randn((5000, 3), generator=gen, dtype=torch.float64)
-    points = (points / points.norm(dim=1, keepdim=True)).to(device)
+    points = (points / points.norm(dim=1, keepdim=True)).to(cuda_device)
 
     normals = estimate_normals(points, radius=0.2, k=30)
     # Normals of a unit sphere are the (possibly sign-flipped) positions.
@@ -73,26 +48,26 @@ def test_normals_on_sphere(device):
     assert float(alignment.min()) > 0.98
 
 
-def test_normals_viewpoint_orientation(device):
+def test_normals_viewpoint_orientation(cuda_device):
     gen = torch.Generator().manual_seed(2)
     xy = torch.rand((500, 2), generator=gen, dtype=torch.float64)
-    points = torch.cat([xy, torch.zeros(500, 1, dtype=torch.float64)], dim=1).to(device)
+    points = torch.cat([xy, torch.zeros(500, 1, dtype=torch.float64)], dim=1).to(cuda_device)
 
-    viewpoint = torch.tensor([0.5, 0.5, 10.0], dtype=torch.float64, device=device)
+    viewpoint = torch.tensor([0.5, 0.5, 10.0], dtype=torch.float64, device=cuda_device)
     normals = estimate_normals(points, radius=0.1, k=20, viewpoint=viewpoint)
     assert (normals[:, 2] > 0.99).all()
 
 
-def test_normals_isolated_points_zero(device):
+def test_normals_isolated_points_zero(cuda_device):
     points = torch.tensor(
-        [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]], dtype=torch.float64, device=device
+        [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]], dtype=torch.float64, device=cuda_device
     )
     normals = estimate_normals(points, radius=0.1, k=5)
     assert (normals == 0).all()
 
 
-def test_normals_input_validation(device):
-    points = random_cloud(10, device, seed=0)
+def test_normals_input_validation(cuda_device):
+    points = random_cloud(10, cuda_device, seed=0)
     with pytest.raises(ValueError, match="radius"):
         estimate_normals(points, radius=0.0)
     with pytest.raises(ValueError, match="k must be"):

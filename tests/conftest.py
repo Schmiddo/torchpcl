@@ -3,29 +3,40 @@ import functools
 import pytest
 import torch
 
+# Pure-torch modules (transforms, estimation, voxel downsampling, the
+# brute-force metrics backend) work on both devices; spatial search and
+# registration are CUDA-only.
 _DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@pytest.fixture(params=_DEVICES)
+def device(request):
+    return torch.device(request.param)
 
 
 @functools.cache
 def cubql_skip_reason() -> str | None:
-    """None if the cubql backend is usable, else a skip reason.
+    """None if the CUDA extension is usable, else a skip reason.
 
     Cached so the JIT compile (or its failure) happens once per session.
     """
     if not torch.cuda.is_available():
         return "CUDA not available"
     try:
-        from torchpcl.search_cubql import _load_extension
+        from torchpcl.search import _load_extension
 
         _load_extension()
     except Exception as exc:  # noqa: BLE001 - any build failure means skip
-        return f"cubql backend unavailable: {exc}"
+        return f"torchpcl CUDA extension unavailable: {exc}"
     return None
 
 
-@pytest.fixture(params=_DEVICES)
-def device(request):
-    return torch.device(request.param)
+@pytest.fixture
+def cuda_device():
+    """CUDA device with a working torchpcl extension, or skip."""
+    if (reason := cubql_skip_reason()) is not None:
+        pytest.skip(reason)
+    return torch.device("cuda")
 
 
 def random_cloud(n: int, device, scale: float = 1.0, seed: int | None = None) -> torch.Tensor:

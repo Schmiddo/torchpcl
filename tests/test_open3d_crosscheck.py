@@ -4,7 +4,7 @@ Skipped unless open3d is importable (it has no Python 3.14 wheels at the
 time of writing; install best-effort with `uv pip install open3d`).
 
 Correspondence index arrays are never compared directly — nearest-neighbor
-tie-breaking differs between warp's hash grid and Open3D's KDTree.
+tie-breaking differs between the cuBQL BVH and Open3D's KDTree.
 """
 
 import numpy as np
@@ -28,8 +28,8 @@ def _to_o3d(points: torch.Tensor, normals: torch.Tensor | None = None):
 
 
 @pytest.mark.parametrize("estimation_name", ["point_to_point", "point_to_plane"])
-def test_matches_open3d(estimation_name):
-    device = torch.device("cpu")
+def test_matches_open3d(estimation_name, cuda_device):
+    device = cuda_device
     target = random_cloud(1000, device, seed=0)
     if estimation_name == "point_to_plane":
         gen = torch.Generator().manual_seed(2)

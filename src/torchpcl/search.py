@@ -1,156 +1,159 @@
-"""Radius-bounded nearest-neighbor search on a warp hash grid.
+"""cuBQL-backed nearest-neighbor search (CUDA).
 
-This is the only module that imports warp. Everything crossing the
-boundary is float32; callers gather from their own float64 copies using
-the returned indices.
+torchpcl's spatial queries run on a GPU-built BVH (third_party/cuBQL).
+The CUDA extension is JIT-compiled on first use and cached by torch;
+torchpcl therefore requires a dev checkout with the cuBQL headers and an
+nvcc toolchain (installed via the project dependencies).
 """
 
+import functools
+import os
+from pathlib import Path
+
 import torch
-import warp as wp
 
-wp.init()
-
-# Hash grid resolution per axis. The warp-example default; adequate for
-# v1 but tunable if cells become too coarse for very large scenes.
-_GRID_DIM = 128
+_EXT_NAME = "torchpcl_cubql"
 
 
-@wp.kernel
-def _knn_kernel(
-    grid: wp.uint64,
-    queries: wp.array(dtype=wp.vec3),
-    points: wp.array(dtype=wp.vec3),
-    radius: float,
-    k: int,
-    out_index: wp.array2d(dtype=wp.int32),
-    out_dist2: wp.array2d(dtype=wp.float32),
-):
-    # Up-to-k nearest within radius, kept sorted by insertion into the
-    # output rows (k is small; global-memory insertion sort is fine for
-    # a one-shot preprocessing query).
-    tid = wp.tid()
-    q = queries[tid]
-    r2 = radius * radius
-    count = int(0)
-    for i in wp.hash_grid_query(grid, q, radius):
-        d2 = wp.length_sq(points[i] - q)
-        if d2 <= r2:
-            j = int(0)
-            if count < k:
-                j = count
-                count += 1
-            elif d2 < out_dist2[tid, k - 1]:
-                j = k - 1
-            else:
-                continue
-            out_index[tid, j] = i
-            out_dist2[tid, j] = d2
-            while j > 0:
-                if out_dist2[tid, j - 1] <= out_dist2[tid, j]:
-                    break
-                tmp_d = out_dist2[tid, j - 1]
-                out_dist2[tid, j - 1] = out_dist2[tid, j]
-                out_dist2[tid, j] = tmp_d
-                tmp_i = out_index[tid, j - 1]
-                out_index[tid, j - 1] = out_index[tid, j]
-                out_index[tid, j] = tmp_i
-                j -= 1
+def _find_cubql_root() -> Path:
+    override = os.environ.get("TORCHPCL_CUBQL_DIR")
+    candidates = (
+        [Path(override)] if override
+        else [Path(__file__).resolve().parents[2] / "third_party" / "cuBQL"]
+    )
+    for root in candidates:
+        if (root / "cuBQL" / "bvh.h").is_file():
+            return root
+    raise RuntimeError(
+        "cuBQL headers not found. torchpcl requires a dev checkout: "
+        "clone/init third_party/cuBQL in the torchpcl repository, or point "
+        "TORCHPCL_CUBQL_DIR at a cuBQL checkout."
+    )
 
 
-@wp.kernel
-def _nn_kernel(
-    grid: wp.uint64,
-    queries: wp.array(dtype=wp.vec3),
-    points: wp.array(dtype=wp.vec3),
-    radius: float,
-    out_index: wp.array(dtype=wp.int32),
-    out_dist2: wp.array(dtype=wp.float32),
-):
-    tid = wp.tid()
-    q = queries[tid]
-    best_i = int(-1)
-    best_d2 = radius * radius
-    for i in wp.hash_grid_query(grid, q, radius):
-        d2 = wp.length_sq(points[i] - q)
-        if d2 <= best_d2:
-            best_d2 = d2
-            best_i = i
-    out_index[tid] = best_i
-    out_dist2[tid] = best_d2
+def _find_cuda_home() -> Path:
+    """Locate a CUDA toolkit matching torch's CUDA major version.
+
+    Prefers the pip-installed toolkit (nvidia/cu<major> in site-packages,
+    installed via `uv sync`); falls back to CUDA_HOME/CUDA_PATH if it
+    points at a toolkit with nvcc.
+    """
+    major = torch.version.cuda.split(".")[0]
+    try:
+        import nvidia
+        # namespace package: locate via __path__ (__file__ is None)
+        for nvidia_dir in nvidia.__path__:
+            pip_home = Path(nvidia_dir) / f"cu{major}"
+            if (pip_home / "bin" / "nvcc").is_file():
+                return pip_home
+    except ImportError:
+        pass
+
+    env_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if env_home and (Path(env_home) / "bin" / "nvcc").is_file():
+        return Path(env_home)
+
+    raise RuntimeError(
+        "No CUDA toolkit with nvcc found. Install the pip toolchain with "
+        "`uv sync`, or set CUDA_HOME to a toolkit matching torch's CUDA "
+        f"version ({torch.version.cuda})."
+    )
+
+
+def _cudart_shim_dir(cuda_home: Path) -> Path:
+    """Pip CUDA wheels ship only libcudart.so.<major>; the linker needs an
+    unversioned libcudart.so. Maintain a symlink in a cache dir we own."""
+    major = torch.version.cuda.split(".")[0]
+    target = cuda_home / "lib" / f"libcudart.so.{major}"
+    shim_dir = Path(os.path.expanduser("~/.cache/torchpcl/lib"))
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    link = shim_dir / "libcudart.so"
+    if link.resolve() != target.resolve():
+        link.unlink(missing_ok=True)
+        link.symlink_to(target)
+    return shim_dir
+
+
+@functools.cache
+def _load_extension():
+    if not torch.cuda.is_available():
+        raise RuntimeError("torchpcl requires a CUDA device")
+    if torch.version.cuda is None:
+        raise RuntimeError("torchpcl requires a CUDA build of torch")
+
+    cubql_root = _find_cubql_root()
+    cuda_home = _find_cuda_home()
+
+    # cpp_extension snapshots CUDA_HOME at import time -- set it first.
+    os.environ.setdefault("CUDA_HOME", str(cuda_home))
+    # Build only for the local device. A user-wide TORCH_CUDA_ARCH_LIST may
+    # name archs the pinned nvcc no longer supports (CUDA 13 dropped
+    # compute_61), so it is deliberately overridden for this extension;
+    # use TORCHPCL_CUDA_ARCH_LIST to compile for other archs.
+    capability = torch.cuda.get_device_capability()
+    os.environ["TORCH_CUDA_ARCH_LIST"] = os.environ.get(
+        "TORCHPCL_CUDA_ARCH_LIST", f"{capability[0]}.{capability[1]}"
+    )
+
+    from torch.utils import cpp_extension
+
+    if cpp_extension.CUDA_HOME is None:
+        cpp_extension.CUDA_HOME = str(cuda_home)
+    if not cpp_extension.is_ninja_available():
+        raise RuntimeError(
+            "ninja is required to build the torchpcl extension; "
+            "install it with `uv sync`"
+        )
+
+    sources = [str(Path(__file__).resolve().parent / "csrc" / "cubql_search.cu")]
+    include_paths = [str(cubql_root), str(cuda_home / "include")]
+    cccl = cuda_home / "include" / "cccl"
+    if cccl.is_dir():
+        include_paths.append(str(cccl))
+
+    return cpp_extension.load(
+        name=_EXT_NAME,
+        sources=sources,
+        extra_include_paths=include_paths,
+        extra_cuda_cflags=["-O3"],
+        extra_ldflags=[f"-L{_cudart_shim_dir(cuda_home)}"],
+    )
 
 
 class NearestNeighborSearch:
-    """1-NN search within a fixed radius over a static point set.
+    """1-NN search within a fixed radius over a static point set (CUDA).
 
     Matches Open3D's hybrid search semantics: for each query point, the
-    nearest point within ``radius``, or -1 if none exists.
+    nearest point within ``radius``, or -1 if none exists. The radius may
+    be ``math.inf`` for unbounded search.
     """
 
     def __init__(self, points: torch.Tensor, radius: float):
-        self._device = str(points.device)
+        if points.device.type != "cuda":
+            raise RuntimeError(
+                f"torchpcl spatial search is CUDA-only; got points on '{points.device}'"
+            )
         self._radius = float(radius)
-        # Keep a reference so the zero-copy warp view stays valid.
         self._points_f32 = points.to(torch.float32).contiguous()
-        self._wp_points = wp.from_torch(self._points_f32, dtype=wp.vec3)
-        self._grid = wp.HashGrid(_GRID_DIM, _GRID_DIM, _GRID_DIM, device=self._device)
-        with self._scoped_stream():
-            self._grid.build(self._wp_points, self._radius)
-
-    def _scoped_stream(self):
-        if self._device.startswith("cuda"):
-            return wp.ScopedStream(wp.stream_from_torch())
-        return wp.ScopedDevice(self._device)
+        self._bvh = _load_extension().PointBVH(self._points_f32)
 
     def query(self, queries: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return (indices, dist2) for each query point.
-
-        indices: (N,) int64, -1 where no point lies within the radius.
-        dist2: (N,) float32 squared distance; only meaningful where
-            the index is >= 0.
-        """
+        """Return (indices, dist2) per query point; index -1 = no neighbor
+        within the radius, dist2 only meaningful where index >= 0."""
         queries_f32 = queries.to(torch.float32).contiguous()
-        out_index = torch.empty(len(queries_f32), dtype=torch.int32, device=queries.device)
-        out_dist2 = torch.empty(len(queries_f32), dtype=torch.float32, device=queries.device)
-        with self._scoped_stream():
-            wp.launch(
-                _nn_kernel,
-                dim=len(queries_f32),
-                inputs=[
-                    self._grid.id,
-                    wp.from_torch(queries_f32, dtype=wp.vec3),
-                    self._wp_points,
-                    self._radius,
-                    wp.from_torch(out_index, dtype=wp.int32),
-                    wp.from_torch(out_dist2, dtype=wp.float32),
-                ],
-                device=self._device,
-            )
-        return out_index.to(torch.int64), out_dist2
+        indices, dist2 = self._bvh.query(queries_f32, self._radius)
+        return indices.to(torch.int64), dist2
 
     def knn_query(self, queries: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Return up to k nearest neighbors within the radius per query.
 
-        indices: (M, k) int64 sorted by distance, -1 padded.
-        dist2: (M, k) float32 squared distances; only meaningful where
+        indices: (M, k) int64 sorted by distance, -1 padded; k <= 64.
+        dist2: (M, k) float32 squared distances, meaningful where
             the index is >= 0.
         """
         queries_f32 = queries.to(torch.float32).contiguous()
-        m = len(queries_f32)
-        out_index = torch.full((m, k), -1, dtype=torch.int32, device=queries.device)
-        out_dist2 = torch.empty((m, k), dtype=torch.float32, device=queries.device)
-        with self._scoped_stream():
-            wp.launch(
-                _knn_kernel,
-                dim=m,
-                inputs=[
-                    self._grid.id,
-                    wp.from_torch(queries_f32, dtype=wp.vec3),
-                    self._wp_points,
-                    self._radius,
-                    k,
-                    wp.from_torch(out_index, dtype=wp.int32),
-                    wp.from_torch(out_dist2, dtype=wp.float32),
-                ],
-                device=self._device,
-            )
-        return out_index.to(torch.int64), out_dist2
+        indices, dist2 = self._bvh.knn(queries_f32, k, self._radius)
+        return indices.to(torch.int64), dist2
+
+
+__all__ = ["NearestNeighborSearch"]

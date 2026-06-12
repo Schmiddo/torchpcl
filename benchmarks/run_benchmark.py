@@ -7,9 +7,9 @@ for torchpcl, small_gicp, and (if importable) open3d.
 Protocol: both clouds are voxel-downsampled once and normals/covariances
 are estimated once, outside the timed region, shared by all methods.
 Each timed run includes the library's own search-structure build
-(hash grid / KdTree) and the full registration from an identity init.
+(BVH / KdTree) and the full registration from an identity init.
 
-Usage: uv run python benchmarks/run_benchmark.py [--device cuda] [--repeats 5]
+Usage: uv run python benchmarks/run_benchmark.py [--voxel 0.25] [--repeats 5]
 """
 
 import argparse
@@ -37,7 +37,7 @@ def pose_errors(t_est: np.ndarray, t_gt: np.ndarray) -> tuple[float, float]:
 
 def timed(fn, repeats: int, sync=None):
     """Run fn repeats+1 times (first is warmup); return (last result, median seconds)."""
-    fn()  # warmup: warp kernel compilation, allocator pools, caches
+    fn()  # warmup: extension JIT compilation, allocator pools, caches
     times = []
     for _ in range(repeats):
         if sync:
@@ -62,7 +62,7 @@ def preprocess(args):
     return source, target, t_gt
 
 
-def bench_torchpcl(rows, source, target, t_gt, args, device, backend="warp"):
+def bench_torchpcl(rows, source, target, t_gt, args, device):
     # float32 inputs: torchpcl works in the input precision (only the
     # transformation and the small solves stay float64).
     src = torch.from_numpy(source.points()[:, :3]).to(device, torch.float32)
@@ -80,15 +80,14 @@ def bench_torchpcl(rows, source, target, t_gt, args, device, backend="warp"):
     for name, kwargs in methods.items():
         result, seconds = timed(
             lambda kwargs=kwargs: torchpcl.icp(
-                src, tgt, args.max_corr_dist,
-                criteria=criteria, backend=backend, **kwargs
+                src, tgt, args.max_corr_dist, criteria=criteria, **kwargs
             ),
             args.repeats,
             sync=sync,
         )
         rot_err, trans_err = pose_errors(result.transformation.cpu().numpy(), t_gt)
         rows.append((
-            f"torchpcl {name} [{device.type},{backend}]",
+            f"torchpcl {name} [{device.type}]",
             seconds, rot_err, trans_err, result.num_iterations, result.converged,
         ))
 
@@ -157,9 +156,6 @@ def main():
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--threads", type=int, default=os.cpu_count(),
                         help="threads for small_gicp")
-    parser.add_argument("--device", default=None,
-                        help="torchpcl device(s), comma-separated "
-                             "(default: cpu + cuda if available)")
     args = parser.parse_args()
 
     source, target, t_gt = preprocess(args)
@@ -167,21 +163,14 @@ def main():
           f"(voxel {args.voxel}), max_corr_dist {args.max_corr_dist}, "
           f"max_iters {args.max_iters}, median of {args.repeats} runs\n")
 
-    if args.device:
-        devices = [torch.device(d) for d in args.device.split(",")]
-    else:
-        devices = [torch.device("cpu")]
-        if torch.cuda.is_available():
-            devices.append(torch.device("cuda"))
+    # torchpcl is CUDA-only.
+    devices = [torch.device("cuda")] if torch.cuda.is_available() else []
+    if not devices:
+        print("CUDA not available -- skipping torchpcl rows")
 
     rows = []
     for device in devices:
         bench_torchpcl(rows, source, target, t_gt, args, device)
-        if device.type == "cuda":
-            try:
-                bench_torchpcl(rows, source, target, t_gt, args, device, backend="cubql")
-            except Exception as exc:
-                print(f"cubql backend unavailable -- skipping ({exc})")
     bench_small_gicp(rows, source, target, t_gt, args)
     bench_open3d(rows, source, target, t_gt, args)
 

@@ -46,13 +46,13 @@ def _nearest_distances(
 ) -> torch.Tensor:
     """Exact distance from each query to its nearest point (unbounded)."""
     if backend == "cubql":
-        from .search_cubql import CuBQLNearestNeighborSearch
+        from .search import NearestNeighborSearch
 
         # Unbounded BVH search returns the NN index; the distance is then
         # recomputed in the input dtype. (The search itself runs in
         # float32, so for float64 inputs an eps-close tie may pick a
         # different but equidistant neighbor.)
-        indices, _ = CuBQLNearestNeighborSearch(points, math.inf).query(queries)
+        indices, _ = NearestNeighborSearch(points, math.inf).query(queries)
         return (queries - points[indices]).norm(dim=1)
     out = torch.empty(len(queries), dtype=queries.dtype, device=queries.device)
     chunk = max(1, _CHUNK_ELEMENTS // len(points))
@@ -70,7 +70,7 @@ def point_cloud_metrics(
     reference: torch.Tensor,
     threshold: float,
     *,
-    backend: str = "torch",
+    backend: str = "cubql",
 ) -> PointCloudMetrics:
     """Compare a predicted/reconstructed cloud against a reference cloud.
 
@@ -78,9 +78,9 @@ def point_cloud_metrics(
         prediction: (N, 3) predicted / reconstructed points.
         reference: (M, 3) reference (ground-truth) points, same device.
         threshold: Inlier distance for precision/recall/F1.
-        backend: "torch" (default, exact chunked brute force, CPU+CUDA)
-            or "cubql" (BVH search, CUDA-only; much faster for large
-            clouds).
+        backend: "cubql" (default, BVH search, CUDA-only) or "torch"
+            (exact chunked brute force; works on CPU tensors but is
+            orders of magnitude slower for large clouds).
 
     Returns:
         PointCloudMetrics; distances are in the input units.

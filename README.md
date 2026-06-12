@@ -1,9 +1,25 @@
 # torchpcl
 
-Minimal ICP registration pipeline built on [PyTorch](https://pytorch.org)
-(tensor / linear-algebra backend) and [NVIDIA Warp](https://github.com/NVIDIA/warp)
-(hash-grid nearest-neighbor search), reimplementing the core of Open3D's
-registration pipeline. Runs on CPU and CUDA.
+Minimal point cloud registration and processing library built on
+[PyTorch](https://pytorch.org) (tensor / linear-algebra backend) and
+[cuBQL](https://github.com/NVIDIA/cuBQL) (GPU BVH build and queries),
+reimplementing the core of Open3D's ICP registration pipeline.
+
+**CUDA-only**: all spatial search (ICP correspondences, k-NN for
+normals, metric distances) runs on a GPU-built BVH. The CUDA extension
+is JIT-compiled on first use (cached afterwards), so torchpcl requires a
+dev checkout with `third_party/cuBQL` and an nvcc toolchain — both
+provided by the repository:
+
+```bash
+git submodule update --init third_party/cuBQL
+uv sync   # installs torch plus the pip nvcc/CCCL toolchain (pinned to torch's CUDA minor)
+```
+
+The build targets only the local GPU architecture; set
+`TORCHPCL_CUDA_ARCH_LIST` to override, `TORCHPCL_CUBQL_DIR` to point at
+an external cuBQL checkout, or `CUDA_HOME` at a system toolkit matching
+`torch.version.cuda`'s major version.
 
 ## Usage
 
@@ -35,22 +51,22 @@ result.correspondences  # (N,) int64 target index, -1 = none
 tp.evaluate_registration(source, target, 0.1, transformation)
 
 # Preprocessing
-down = tp.voxel_downsample(target, voxel_size=0.05)     # per-voxel means
-normals = tp.estimate_normals(down, radius=0.2, k=30)   # hybrid k-NN + PCA
-                                                        # viewpoint=... to orient
-# backend="cubql" (CUDA): radius becomes optional (true k-NN, k <= 64)
-normals = tp.estimate_normals(down, k=30, backend="cubql")
+down = tp.voxel_downsample(target, voxel_size=0.05)  # per-voxel means
+normals = tp.estimate_normals(down, k=30)            # unbounded k-NN + PCA
+normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...)
 
 # Cloud comparison (accuracy/completion from prediction->reference /
 # reference->prediction; chamfer = accuracy + completion)
 m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
-# backend="cubql" (CUDA): BVH search instead of brute force --
-# orders of magnitude faster for large clouds
+# backend="torch": exact chunked brute force, works on CPU tensors
+# (orders of magnitude slower for large clouds)
 ```
 
-The API mirrors `open3d.t.pipelines.registration.icp` semantics:
-hybrid correspondence search (nearest target point within
+Points are processed in the input precision (float32 recommended); only
+the cumulative transformation and the small per-iteration solves are
+float64. The API mirrors `open3d.t.pipelines.registration.icp`
+semantics: hybrid correspondence search (nearest target point within
 `max_correspondence_distance`), Umeyama solve for point-to-point,
 linearized 6-DOF solve for point-to-plane, convergence on relative
 fitness/RMSE change.
@@ -63,40 +79,15 @@ transformation and returns `converged=False, fitness=0`.
 
 ```bash
 uv sync
-uv run pytest -q
+uv run pytest -q   # requires a CUDA GPU; first run JIT-compiles the extension
 ```
-
-Tests run on CPU and, when available, CUDA.
-
-### cuBQL backend (experimental, CUDA-only)
-
-Correspondence search defaults to a warp hash grid (`backend="warp"`,
-CPU + CUDA). An alternative BVH-based backend built on
-[cuBQL](https://github.com/NVIDIA/cuBQL) is available on CUDA:
-
-```python
-result = tp.icp(source, target, 0.1, backend="cubql")
-```
-
-It requires a dev checkout (cuBQL headers under `third_party/cuBQL`,
-or `TORCHPCL_CUBQL_DIR`) and the JIT toolchain:
-
-```bash
-uv sync --group cubql   # pip-shipped nvcc/cccl pinned to torch's CUDA minor
-```
-
-The first call compiles the extension with `torch.utils.cpp_extension`
-(cached afterwards). The build targets only the local GPU architecture;
-set `TORCHPCL_CUDA_ARCH_LIST` to override. If a system CUDA toolkit
-matching `torch.version.cuda`'s major version is installed, setting
-`CUDA_HOME` to it works as an alternative to the pip toolchain.
 
 ### Benchmark
 
 `benchmarks/run_benchmark.py` registers the sample scans in `data/`
 (source/target + ground-truth `T_target_source.txt`) and reports pose
-error and wall time for torchpcl (CPU and CUDA), small_gicp, and open3d
-when importable:
+error and wall time for torchpcl, small_gicp, and open3d when
+importable:
 
 ```bash
 uv run python benchmarks/run_benchmark.py [--voxel 0.25] [--repeats 5]
@@ -111,10 +102,13 @@ search-structure build and the full registration from identity.
 `tests/test_open3d_crosscheck.py` compares results against
 `open3d.pipelines.registration.registration_icp` on identical inputs and
 skips when open3d is not importable. open3d has no Python 3.14 wheels
-yet, so run it from a Python ≤3.12 environment, e.g.:
+yet, so run it from a Python ≤3.12 environment with a CUDA build of
+torch, e.g.:
 
 ```bash
 uv venv -p 3.12 /tmp/o3d-venv
-VIRTUAL_ENV=/tmp/o3d-venv uv pip install torch warp-lang pytest open3d
+VIRTUAL_ENV=/tmp/o3d-venv uv pip install torch ninja open3d numpy \
+    "nvidia-cuda-nvcc~=13.0.0" "nvidia-cuda-cccl~=13.0.0" \
+    "nvidia-cuda-runtime~=13.0.0" "nvidia-cuda-crt~=13.0.0" "nvidia-nvvm~=13.0.0"
 PYTHONPATH=src /tmp/o3d-venv/bin/python -m pytest -q tests/
 ```
