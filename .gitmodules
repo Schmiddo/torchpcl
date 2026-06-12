@@ -1,0 +1,6 @@
+[submodule "third_party/open3d"]
+	path = third_party/open3d
+	url = https://github.com/isl-org/open3d
+[submodule "third_party/small_gicp"]
+	path = third_party/small_gicp
+	url = https://github.com/koide3/small_gicp
