@@ -4,7 +4,6 @@ import torch
 from torchpcl import (
     ICPConvergenceCriteria,
     PointToPlane,
-    PointToPoint,
     evaluate_registration,
     icp,
 )

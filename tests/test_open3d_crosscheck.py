@@ -1,7 +1,7 @@
 """Cross-check against Open3D's legacy registration pipeline.
 
 Skipped unless open3d is importable (it has no Python 3.14 wheels at the
-time of writing; install best-effort with `uv pip install open3d`).
+time of writing; see the README for a Python <=3.12 recipe).
 
 Correspondence index arrays are never compared directly — nearest-neighbor
 tie-breaking differs between the cuBQL BVH and Open3D's KDTree.
@@ -13,10 +13,11 @@ import torch
 
 o3d = pytest.importorskip("open3d")
 
-from torchpcl import ICPConvergenceCriteria, PointToPlane, PointToPoint, icp
-from torchpcl.transforms import transform_points
+# Imports below run only when open3d is available.
+from torchpcl import ICPConvergenceCriteria, PointToPlane, PointToPoint, icp  # noqa: E402
+from torchpcl.transforms import transform_points  # noqa: E402
 
-from conftest import random_cloud, random_rigid_transform
+from conftest import random_cloud, random_rigid_transform  # noqa: E402
 
 
 def _to_o3d(points: torch.Tensor, normals: torch.Tensor | None = None):

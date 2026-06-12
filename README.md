@@ -2,7 +2,7 @@
 
 Minimal point cloud registration and processing library built on
 [PyTorch](https://pytorch.org) (tensor / linear-algebra backend) and
-[cuBQL](https://github.com/NVIDIA/cuBQL) (GPU BVH build and queries),
+[cuBQL](https://github.com/NVIDIA/cuBQL) (BVH build and queries),
 reimplementing the core of Open3D's ICP registration pipeline.
 
 All spatial search (ICP correspondences, k-NN for normals, metric
@@ -112,8 +112,10 @@ yet, so run it from a Python ≤3.12 environment, e.g.:
 
 ```bash
 uv venv -p 3.12 /tmp/o3d-venv
-VIRTUAL_ENV=/tmp/o3d-venv uv pip install torch ninja open3d numpy \
-    "nvidia-cuda-nvcc~=13.0.0" "nvidia-cuda-cccl~=13.0.0" \
-    "nvidia-cuda-runtime~=13.0.0" "nvidia-cuda-crt~=13.0.0" "nvidia-nvvm~=13.0.0"
+VIRTUAL_ENV=/tmp/o3d-venv uv pip install torch ninja open3d numpy
 PYTHONPATH=src /tmp/o3d-venv/bin/python -m pytest -q tests/
 ```
+
+The cross-check runs on the CPU extension there; CUDA-parametrized
+tests skip unless that environment also has the nvcc toolchain
+(`nvidia-cuda-nvcc~=13.0.0` etc., see `pyproject.toml`).

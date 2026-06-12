@@ -14,13 +14,12 @@ Conventions (matching the MVS / surface-reconstruction literature):
   prediction.
 - ``f1_score``: harmonic mean of precision and recall.
 
-Nearest-neighbor distances are exact (chunked brute force), unbounded by
-any search radius.
+Nearest-neighbor distances are exact and unbounded by any search radius
+(BVH search by default, chunked brute force with ``backend="torch"``).
 """
 
-from dataclasses import dataclass
-
 import math
+from dataclasses import dataclass
 
 import torch
 

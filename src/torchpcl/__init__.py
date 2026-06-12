@@ -1,4 +1,4 @@
-"""Point cloud registration and processing built on torch and cuBQL (CUDA)."""
+"""Point cloud registration and processing built on torch and cuBQL."""
 
 from .estimation import PointToPlane, PointToPoint, TransformationEstimation
 from .metrics import PointCloudMetrics, point_cloud_metrics

@@ -1,8 +1,9 @@
-// cuBQL-backed 1-NN-within-radius search for torchpcl.
+// cuBQL-backed 1-NN / k-NN search on CUDA.
 //
 // Single translation unit: pulls in the cuBQL GPU builder implementation
 // (header-only library, see third_party/cuBQL) and exposes a PointBVH
-// class to Python via the torch extension machinery.
+// class to Python via the torch extension machinery. The CPU sibling
+// (cubql_search_cpu.cpp) runs the same query code host-side.
 
 #define CUBQL_GPU_BUILDER_IMPLEMENTATION 1
 #include "cuBQL/bvh.h"
@@ -35,8 +36,8 @@ __global__ void nn_query(
   const cuBQL::vec3f q = queries[i];
   const int j = cuBQL::points::findClosest(bvh, pts, q, max_d2);
   out_idx[i] = j;
-  // dist2 is only meaningful where j >= 0 (mirrors the warp backend,
-  // which leaves radius^2 in unmatched slots).
+  // dist2 is only meaningful where j >= 0; unmatched slots hold
+  // radius^2 (callers mask before using it).
   out_dist2[i] = j >= 0 ? cuBQL::sqrDistance(pts[j], q) : max_d2;
 }
 

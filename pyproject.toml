@@ -1,7 +1,7 @@
 [project]
 name = "torchpcl"
 version = "0.1.0"
-description = "Add your description here"
+description = "Point cloud registration (ICP) and processing built on torch and cuBQL"
 readme = "README.md"
 requires-python = ">=3.14"
 # nvcc/cccl pinned to the same minor as torch's bundled CUDA runtime

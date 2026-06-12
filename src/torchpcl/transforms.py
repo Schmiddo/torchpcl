@@ -1,4 +1,4 @@
-"""Rigid transformation helpers (pure torch, float64)."""
+"""Rigid transformation helpers (pure torch, device- and dtype-agnostic)."""
 
 import torch
 
