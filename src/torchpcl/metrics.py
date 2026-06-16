@@ -14,8 +14,8 @@ Conventions (matching the MVS / surface-reconstruction literature):
   prediction.
 - ``f1_score``: harmonic mean of precision and recall.
 
-Nearest-neighbor distances are exact and unbounded by any search radius
-(BVH search by default, chunked brute force with ``backend="torch"``).
+Nearest-neighbor distances are exact and unbounded by any search radius,
+using the cuBQL-backed search extension.
 """
 
 import math
@@ -25,10 +25,6 @@ import torch
 
 from .search import NearestNeighborSearch
 from .transforms import _check_points
-
-# Chunk the (M, N) distance matrix to roughly this many elements
-# (~256 MB in float32).
-_CHUNK_ELEMENTS = 64_000_000
 
 
 @dataclass(frozen=True)
@@ -41,15 +37,13 @@ class PointCloudMetrics:
     f1_score: float
 
 
-def _nearest_distances(
-    queries: torch.Tensor, points: torch.Tensor, backend: str
-) -> torch.Tensor:
+def _nearest_distances(queries: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
     """Exact distance from each query to its nearest point (unbounded)."""
 
     # Unbounded BVH search returns the NN index; the distance is then
-    # recomputed in the input dtype. (The search itself runs in
-    # float32, so for float64 inputs an eps-close tie may pick a
-    # different but equidistant neighbor.)
+    # recomputed in the input dtype. (The search itself runs in float32,
+    # so for float64 inputs an eps-close tie may pick a different but
+    # equidistant neighbor.)
     indices, _ = NearestNeighborSearch(points, math.inf).query(queries)
     return (queries - points[indices]).norm(dim=1)
 
@@ -65,9 +59,6 @@ def point_cloud_metrics(
         prediction: (N, 3) predicted / reconstructed points.
         reference: (M, 3) reference (ground-truth) points, same device.
         threshold: Inlier distance for precision/recall/F1.
-        backend: "cubql" (default, BVH search, CPU+CUDA) or "torch"
-            (exact chunked brute force; orders of magnitude slower for
-            large clouds).
 
     Returns:
         PointCloudMetrics; distances are in the input units.

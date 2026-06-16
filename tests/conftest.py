@@ -4,7 +4,7 @@ import pytest
 import torch
 
 # `device` parametrizes pure-torch tests (transforms, estimation, voxel
-# downsampling, brute-force metrics). Tests touching spatial search use
+# downsampling). Tests touching spatial search use
 # `search_device` instead, which additionally skips when the JIT-compiled
 # extension for that device is unavailable.
 _DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])

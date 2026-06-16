@@ -3,10 +3,9 @@
 torchpcl's spatial queries run on a cuBQL BVH (third_party/cuBQL). Both
 backends use the same traversal code: a CUDA extension on GPU and a
 plain C++ extension (parallelized over the intra-op thread pool) on
-CPU. Extensions are JIT-compiled on first use and cached by torch;
-torchpcl therefore requires a dev checkout with the cuBQL headers, a
-C++ compiler, and -- for the CUDA path -- the nvcc toolchain installed
-via the project dependencies.
+CPU. Extensions are JIT-compiled on first use and cached by torch. Wheel
+and sdist installs include the C++/CUDA sources and cuBQL headers; users
+still need the JIT build dependencies for the selected backend.
 """
 
 import functools
@@ -23,15 +22,18 @@ def _find_cubql_root() -> Path:
     override = os.environ.get("TORCHPCL_CUBQL_DIR")
     candidates = (
         [Path(override)] if override
-        else [Path(__file__).resolve().parents[2] / "third_party" / "cuBQL"]
+        else [
+            Path(__file__).resolve().parent / "_vendor" / "cuBQL",
+            Path(__file__).resolve().parents[2] / "third_party" / "cuBQL",
+        ]
     )
     for root in candidates:
         if (root / "cuBQL" / "bvh.h").is_file():
             return root
     raise RuntimeError(
-        "cuBQL headers not found. torchpcl requires a dev checkout: "
-        "clone/init third_party/cuBQL in the torchpcl repository, or point "
-        "TORCHPCL_CUBQL_DIR at a cuBQL checkout."
+        "cuBQL headers not found. Install torchpcl from a wheel/sdist that "
+        "includes vendored headers, clone/init third_party/cuBQL in the "
+        "torchpcl repository, or point TORCHPCL_CUBQL_DIR at a cuBQL checkout."
     )
 
 
@@ -59,8 +61,8 @@ def _find_cuda_home() -> Path:
 
     raise RuntimeError(
         "No CUDA toolkit with nvcc found. Install the pip toolchain with "
-        "`uv sync`, or set CUDA_HOME to a toolkit matching torch's CUDA "
-        f"version ({torch.version.cuda})."
+        "torchpcl's dev dependencies, or set CUDA_HOME to a toolkit matching "
+        f"torch's CUDA version ({torch.version.cuda})."
     )
 
 
@@ -106,7 +108,7 @@ def _load_cuda_extension():
     if not cpp_extension.is_ninja_available():
         raise RuntimeError(
             "ninja is required to build the torchpcl extension; "
-            "install it with `uv sync`"
+            "install torchpcl's dev dependencies"
         )
 
     sources = [str(Path(__file__).resolve().parent / "csrc" / "cubql_search.cu")]
@@ -133,7 +135,7 @@ def _load_cpu_extension():
     if not cpp_extension.is_ninja_available():
         raise RuntimeError(
             "ninja is required to build the torchpcl extension; "
-            "install it with `uv sync`"
+            "install torchpcl's dev dependencies"
         )
 
     sources = [str(Path(__file__).resolve().parent / "csrc" / "cubql_search_cpu.cpp")]

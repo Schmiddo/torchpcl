@@ -61,32 +61,9 @@ def test_direction_swap_symmetry(search_device):
     assert ab.f1_score == pytest.approx(ba.f1_score)
 
 
-def test_torch_backend_matches_default(search_device):
-    prediction = random_cloud(3000, search_device, seed=4)
-    reference = random_cloud(4000, search_device, seed=5) + 0.02
-
-    fast = point_cloud_metrics(prediction, reference, threshold=0.05)
-    ref = point_cloud_metrics(prediction, reference, threshold=0.05, backend="torch")
-    assert fast.accuracy == pytest.approx(ref.accuracy, rel=1e-6)
-    assert fast.completion == pytest.approx(ref.completion, rel=1e-6)
-    assert fast.chamfer_distance == pytest.approx(ref.chamfer_distance, rel=1e-6)
-    assert fast.precision == pytest.approx(ref.precision)
-    assert fast.recall == pytest.approx(ref.recall)
-    assert fast.f1_score == pytest.approx(ref.f1_score)
-
-
-def test_torch_backend_on_cpu():
-    # The brute-force backend stays usable for CPU tensors.
-    points = random_cloud(200, "cpu", seed=6)
-    m = point_cloud_metrics(points, points, threshold=0.01, backend="torch")
-    assert m.f1_score == 1.0
-
-
 def test_validation(device):
     points = random_cloud(10, device, seed=0)
     with pytest.raises(ValueError, match="threshold"):
         point_cloud_metrics(points, points, threshold=0.0)
     with pytest.raises(ValueError, match="non-empty"):
         point_cloud_metrics(points[:0], points, threshold=0.1)
-    with pytest.raises(ValueError, match="unknown backend"):
-        point_cloud_metrics(points, points, threshold=0.1, backend="kdtree")

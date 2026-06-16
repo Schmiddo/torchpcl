@@ -1,7 +1,7 @@
 """Cross-check against Open3D's legacy registration pipeline.
 
-Skipped unless open3d is importable (it has no Python 3.14 wheels at the
-time of writing; see the README for a Python <=3.12 recipe).
+Skipped unless open3d is importable; install the benchmark dependency
+group to enable it.
 
 Correspondence index arrays are never compared directly — nearest-neighbor
 tie-breaking differs between the cuBQL BVH and Open3D's KDTree.

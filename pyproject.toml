@@ -3,14 +3,41 @@ name = "torchpcl"
 version = "0.1.0"
 description = "Point cloud registration (ICP) and processing built on torch and cuBQL"
 readme = "README.md"
-requires-python = ">=3.14"
-# nvcc/cccl pinned to the same minor as torch's bundled CUDA runtime
-# (mixed minors in the shared nvidia/cu13 tree fail CCCL's version check).
-# They are required: torchpcl JIT-compiles its cuBQL CUDA extension.
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=2",
-    "small-gicp",
     "torch>=2.12.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/README.md",
+    "/pyproject.toml",
+    "/src/torchpcl",
+    "/tests",
+    "/benchmarks",
+    "/data",
+    "/third_party/cuBQL/cuBQL",
+    "/third_party/cuBQL/LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/torchpcl"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"third_party/cuBQL/cuBQL" = "torchpcl/_vendor/cuBQL/cuBQL"
+"third_party/cuBQL/LICENSE" = "torchpcl/_vendor/cuBQL/LICENSE"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    # JIT extension builds. The CUDA packages are pinned to the same minor
+    # as torch's bundled CUDA runtime because mixed minors in the shared
+    # nvidia/cu13 tree fail CCCL's version check.
     "ninja>=1.11",
     "nvidia-cuda-nvcc~=13.0.0",
     "nvidia-cuda-cccl~=13.0.0",
@@ -18,13 +45,10 @@ dependencies = [
     "nvidia-cuda-crt~=13.0.0",
     "nvidia-nvvm~=13.0.0",
 ]
-
-[build-system]
-requires = ["uv_build>=0.7.0,<0.10.0"]
-build-backend = "uv_build"
-
-[dependency-groups]
-dev = ["pytest>=8"]
+benchmark = [
+    "open3d; python_version < '3.13'",
+    "small-gicp",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

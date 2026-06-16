@@ -1,15 +1,12 @@
-"""Registration benchmark on the sample scans in data/.
+"""Benchmarks on the sample scans in data/.
 
-Registers data/source.ply to data/target.ply and reports the rotation /
-translation error against data/T_target_source.txt plus the wall time,
-for torchpcl, small_gicp, and (if importable) open3d.
+Runs torchpcl registration and preprocessing benchmarks without requiring
+comparison libraries. Install the benchmark dependency group to add
+small_gicp and open3d comparison rows.
 
-Protocol: both clouds are voxel-downsampled once and normals/covariances
-are estimated once, outside the timed region, shared by all methods.
-Each timed run includes the library's own search-structure build
-(BVH / KdTree) and the full registration from an identity init.
-
-Usage: uv run python benchmarks/run_benchmark.py [--voxel 0.25] [--repeats 5]
+Usage:
+    uv run python benchmarks/run_benchmark.py [--task all] [--voxel 0.25] [--repeats 5]
+    uv run --group benchmark python benchmarks/run_benchmark.py
 """
 
 import argparse
@@ -20,12 +17,73 @@ import time
 from pathlib import Path
 
 import numpy as np
-import small_gicp
 import torch
 
 import torchpcl
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+
+def read_ply_points(path: Path) -> np.ndarray:
+    """Read vertex xyz columns from an ASCII or binary little-endian PLY."""
+    with path.open("rb") as f:
+        header: list[str] = []
+        while True:
+            line = f.readline()
+            if not line:
+                raise ValueError(f"{path} has no PLY end_header")
+            text = line.decode("ascii").strip()
+            header.append(text)
+            if text == "end_header":
+                break
+        if header[0] != "ply":
+            raise ValueError(f"{path} is not a PLY file")
+        fmt = next(line.split()[1] for line in header if line.startswith("format "))
+        vertex_count = 0
+        properties: list[tuple[str, str]] = []
+        in_vertex = False
+        for line in header:
+            parts = line.split()
+            if parts[:2] == ["element", "vertex"]:
+                vertex_count = int(parts[2])
+                in_vertex = True
+            elif parts and parts[0] == "element":
+                in_vertex = False
+            elif in_vertex and parts[:1] == ["property"]:
+                properties.append((parts[1], parts[2]))
+        if vertex_count <= 0:
+            raise ValueError(f"{path} has no vertices")
+
+        dtype_map = {
+            "char": "i1",
+            "uchar": "u1",
+            "int8": "i1",
+            "uint8": "u1",
+            "short": "i2",
+            "ushort": "u2",
+            "int16": "i2",
+            "uint16": "u2",
+            "int": "i4",
+            "uint": "u4",
+            "int32": "i4",
+            "uint32": "u4",
+            "float": "f4",
+            "float32": "f4",
+            "double": "f8",
+            "float64": "f8",
+        }
+        names = [name for _, name in properties]
+        if names[:3] != ["x", "y", "z"]:
+            raise ValueError(f"{path} must store x/y/z as the first vertex properties")
+
+        if fmt == "binary_little_endian":
+            dtype = np.dtype([(name, "<" + dtype_map[kind]) for kind, name in properties])
+            data = np.fromfile(f, dtype=dtype, count=vertex_count)
+            return np.column_stack([data["x"], data["y"], data["z"]]).astype(np.float32)
+        if fmt == "ascii":
+            data = np.loadtxt(f, max_rows=vertex_count, dtype=np.float32)
+            return data[:, :3]
+        raise ValueError(f"unsupported PLY format: {fmt}")
 
 
 def pose_errors(t_est: np.ndarray, t_gt: np.ndarray) -> tuple[float, float]:
@@ -37,8 +95,9 @@ def pose_errors(t_est: np.ndarray, t_gt: np.ndarray) -> tuple[float, float]:
 
 def timed(fn, repeats: int, sync=None):
     """Run fn repeats+1 times (first is warmup); return (last result, median seconds)."""
-    fn()  # warmup: extension JIT compilation, allocator pools, caches
+    fn()
     times = []
+    result = None
     for _ in range(repeats):
         if sync:
             sync()
@@ -50,54 +109,76 @@ def timed(fn, repeats: int, sync=None):
     return result, statistics.median(times)
 
 
-def preprocess(args):
-    source = small_gicp.read_ply(str(DATA_DIR / "source.ply"))
-    target = small_gicp.read_ply(str(DATA_DIR / "target.ply"))
+def load_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    source = read_ply_points(DATA_DIR / "source.ply")
+    target = read_ply_points(DATA_DIR / "target.ply")
     t_gt = np.loadtxt(DATA_DIR / "T_target_source.txt")
-
-    source = small_gicp.voxelgrid_sampling(source, args.voxel)
-    target = small_gicp.voxelgrid_sampling(target, args.voxel)
-    small_gicp.estimate_normals_covariances(source, num_threads=args.threads)
-    small_gicp.estimate_normals_covariances(target, num_threads=args.threads)
     return source, target, t_gt
 
 
-def bench_torchpcl(rows, source, target, t_gt, args, device):
-    # float32 inputs: torchpcl works in the input precision (only the
-    # transformation and the small solves stay float64).
-    src = torch.from_numpy(source.points()[:, :3]).to(device, torch.float32)
-    tgt = torch.from_numpy(target.points()[:, :3]).to(device, torch.float32)
-    normals = torch.from_numpy(target.normals()[:, :3]).to(device, torch.float32)
-    criteria = torchpcl.ICPConvergenceCriteria(max_iteration=args.max_iters)
+def torch_devices() -> list[torch.device]:
+    devices = [torch.device("cpu")]
+    if torch.cuda.is_available():
+        devices.append(torch.device("cuda"))
+    return devices
+
+
+def bench_torchpcl_registration(rows, source_np, target_np, t_gt, args, device):
     sync = torch.cuda.synchronize if device.type == "cuda" else None
+    source = torch.from_numpy(source_np).to(device)
+    target = torch.from_numpy(target_np).to(device)
+
+    source_down = torchpcl.voxel_downsample(source, args.voxel)
+    target_down = torchpcl.voxel_downsample(target, args.voxel)
+    normals = torchpcl.estimate_normals(target_down, k=args.normal_k)
+    criteria = torchpcl.ICPConvergenceCriteria(max_iteration=args.max_iters)
 
     methods = {
         "point-to-point": dict(estimation=torchpcl.PointToPoint()),
-        "point-to-plane": dict(
-            estimation=torchpcl.PointToPlane(), target_normals=normals
-        ),
+        "point-to-plane": dict(estimation=torchpcl.PointToPlane(), target_normals=normals),
     }
     for name, kwargs in methods.items():
         result, seconds = timed(
             lambda kwargs=kwargs: torchpcl.icp(
-                src, tgt, args.max_corr_dist, criteria=criteria, **kwargs
+                source_down, target_down, args.max_corr_dist, criteria=criteria, **kwargs
             ),
             args.repeats,
             sync=sync,
         )
         rot_err, trans_err = pose_errors(result.transformation.cpu().numpy(), t_gt)
         rows.append((
+            "registration",
             f"torchpcl {name} [{device.type}]",
-            seconds, rot_err, trans_err, result.num_iterations, result.converged,
+            seconds,
+            f"rot {rot_err:.4f} deg, trans {trans_err:.4f} m, "
+            f"iters {result.num_iterations}, conv {'yes' if result.converged else 'no'}",
         ))
 
 
-def bench_small_gicp(rows, source, target, t_gt, args):
+def bench_small_gicp_registration(rows, t_gt, args):
+    try:
+        import small_gicp
+    except ImportError:
+        print("small_gicp not importable -- skipping registration comparison")
+        return
+
+    source = small_gicp.voxelgrid_sampling(
+        small_gicp.read_ply(str(DATA_DIR / "source.ply")), args.voxel
+    )
+    target = small_gicp.voxelgrid_sampling(
+        small_gicp.read_ply(str(DATA_DIR / "target.ply")), args.voxel
+    )
+    small_gicp.estimate_normals_covariances(source, num_threads=args.threads)
+    small_gicp.estimate_normals_covariances(target, num_threads=args.threads)
+
     for reg_type in ("ICP", "PLANE_ICP", "GICP"):
+
         def run(reg_type=reg_type):
             tree = small_gicp.KdTree(target, num_threads=args.threads)
             return small_gicp.align(
-                target, source, tree,
+                target,
+                source,
+                tree,
                 registration_type=reg_type,
                 max_correspondence_distance=args.max_corr_dist,
                 max_iterations=args.max_iters,
@@ -107,28 +188,29 @@ def bench_small_gicp(rows, source, target, t_gt, args):
         result, seconds = timed(run, args.repeats)
         rot_err, trans_err = pose_errors(result.T_target_source, t_gt)
         rows.append((
+            "registration",
             f"small_gicp {reg_type} [{args.threads}t]",
-            seconds, rot_err, trans_err, result.iterations, result.converged,
+            seconds,
+            f"rot {rot_err:.4f} deg, trans {trans_err:.4f} m, "
+            f"iters {result.iterations}, conv {'yes' if result.converged else 'no'}",
         ))
 
 
-def bench_open3d(rows, source, target, t_gt, args):
+def bench_open3d_registration(rows, source_np, target_np, t_gt, args):
     try:
         import open3d as o3d
     except ImportError:
-        print("open3d not importable in this environment -- skipping "
-              "(no Python 3.14 wheels; see README)")
+        print("open3d not importable -- skipping registration comparison")
         return
 
-    def to_o3d(pcd, with_normals):
+    def to_o3d(points: np.ndarray):
         out = o3d.geometry.PointCloud()
-        out.points = o3d.utility.Vector3dVector(pcd.points()[:, :3])
-        if with_normals:
-            out.normals = o3d.utility.Vector3dVector(pcd.normals()[:, :3])
+        out.points = o3d.utility.Vector3dVector(points.astype(np.float64))
         return out
 
-    src = to_o3d(source, with_normals=False)
-    tgt = to_o3d(target, with_normals=True)
+    src = to_o3d(source_np).voxel_down_sample(args.voxel)
+    tgt = to_o3d(target_np).voxel_down_sample(args.voxel)
+    tgt.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=args.normal_k))
     criteria = o3d.pipelines.registration.ICPConvergenceCriteria(
         max_iteration=args.max_iters
     )
@@ -144,13 +226,117 @@ def bench_open3d(rows, source, target, t_gt, args):
             args.repeats,
         )
         rot_err, trans_err = pose_errors(np.asarray(result.transformation), t_gt)
-        rows.append((f"open3d {name}", seconds, rot_err, trans_err, None, None))
+        rows.append((
+            "registration",
+            f"open3d {name}",
+            seconds,
+            f"rot {rot_err:.4f} deg, trans {trans_err:.4f} m",
+        ))
+
+
+def bench_torchpcl_preprocess(rows, target_np, args, device):
+    sync = torch.cuda.synchronize if device.type == "cuda" else None
+    target = torch.from_numpy(target_np).to(device)
+
+    down, seconds = timed(
+        lambda: torchpcl.voxel_downsample(target, args.voxel), args.repeats, sync=sync
+    )
+    rows.append((
+        "preprocess",
+        f"torchpcl voxel_downsample [{device.type}]",
+        seconds,
+        f"{len(target)} -> {len(down)} points",
+    ))
+
+    normals, seconds = timed(
+        lambda: torchpcl.estimate_normals(down, k=args.normal_k), args.repeats, sync=sync
+    )
+    rows.append((
+        "preprocess",
+        f"torchpcl estimate_normals [{device.type}]",
+        seconds,
+        f"{len(normals)} normals, k={args.normal_k}",
+    ))
+
+
+def bench_small_gicp_preprocess(rows, args):
+    try:
+        import small_gicp
+    except ImportError:
+        print("small_gicp not importable -- skipping preprocessing comparison")
+        return
+
+    target = small_gicp.read_ply(str(DATA_DIR / "target.ply"))
+    down, seconds = timed(
+        lambda: small_gicp.voxelgrid_sampling(target, args.voxel), args.repeats
+    )
+    rows.append((
+        "preprocess",
+        f"small_gicp voxelgrid_sampling [{args.threads}t]",
+        seconds,
+        f"{target.size()} -> {down.size()} points",
+    ))
+
+    _, seconds = timed(
+        lambda: small_gicp.estimate_normals_covariances(
+            down, num_threads=args.threads
+        ),
+        args.repeats,
+    )
+    rows.append((
+        "preprocess",
+        f"small_gicp estimate_normals_covariances [{args.threads}t]",
+        seconds,
+        f"{down.size()} normals/covariances",
+    ))
+
+
+def bench_open3d_preprocess(rows, target_np, args):
+    try:
+        import open3d as o3d
+    except ImportError:
+        print("open3d not importable -- skipping preprocessing comparison")
+        return
+
+    target = o3d.geometry.PointCloud()
+    target.points = o3d.utility.Vector3dVector(target_np.astype(np.float64))
+    down, seconds = timed(lambda: target.voxel_down_sample(args.voxel), args.repeats)
+    rows.append((
+        "preprocess",
+        "open3d voxel_down_sample",
+        seconds,
+        f"{len(target.points)} -> {len(down.points)} points",
+    ))
+
+    _, seconds = timed(
+        lambda: down.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamKNN(knn=args.normal_k)
+        ),
+        args.repeats,
+    )
+    rows.append((
+        "preprocess",
+        "open3d estimate_normals",
+        seconds,
+        f"{len(down.points)} normals, k={args.normal_k}",
+    ))
+
+
+def print_rows(rows):
+    header = f"{'task':<13} {'method':<52} {'time':>10}  detail"
+    print(header)
+    print("-" * len(header))
+    for task, name, seconds, detail in rows:
+        print(f"{task:<13} {name:<52} {seconds * 1e3:>8.2f}ms  {detail}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", choices=("all", "registration", "preprocess"), default="all")
     parser.add_argument("--voxel", type=float, default=0.25,
                         help="voxel downsampling resolution")
+    parser.add_argument("--normal-k", type=int, default=30,
+                        help="neighbors for normal estimation")
     parser.add_argument("--max-corr-dist", type=float, default=1.0)
     parser.add_argument("--max-iters", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=5)
@@ -158,29 +344,24 @@ def main():
                         help="threads for small_gicp")
     args = parser.parse_args()
 
-    source, target, t_gt = preprocess(args)
-    print(f"source: {source.size()} pts, target: {target.size()} pts "
-          f"(voxel {args.voxel}), max_corr_dist {args.max_corr_dist}, "
-          f"max_iters {args.max_iters}, median of {args.repeats} runs\n")
-
-    devices = [torch.device("cpu")]
-    if torch.cuda.is_available():
-        devices.append(torch.device("cuda"))
+    source, target, t_gt = load_inputs()
+    print(f"source: {len(source)} pts, target: {len(target)} pts, voxel {args.voxel}, "
+          f"normal_k {args.normal_k}, median of {args.repeats} runs\n")
 
     rows = []
-    for device in devices:
-        bench_torchpcl(rows, source, target, t_gt, args, device)
-    bench_small_gicp(rows, source, target, t_gt, args)
-    bench_open3d(rows, source, target, t_gt, args)
+    if args.task in {"all", "preprocess"}:
+        for device in torch_devices():
+            bench_torchpcl_preprocess(rows, target, args, device)
+        bench_small_gicp_preprocess(rows, args)
+        bench_open3d_preprocess(rows, target, args)
 
-    header = f"{'method':<34} {'time':>9} {'rot err':>10} {'trans err':>10} {'iters':>6}  conv"
-    print(header)
-    print("-" * len(header))
-    for name, seconds, rot_err, trans_err, iters, converged in rows:
-        iters_s = "-" if iters is None else str(iters)
-        conv_s = "-" if converged is None else ("yes" if converged else "no")
-        print(f"{name:<34} {seconds * 1e3:>7.2f}ms {rot_err:>9.4f}° "
-              f"{trans_err:>9.4f}m {iters_s:>6}  {conv_s}")
+    if args.task in {"all", "registration"}:
+        for device in torch_devices():
+            bench_torchpcl_registration(rows, source, target, t_gt, args, device)
+        bench_small_gicp_registration(rows, t_gt, args)
+        bench_open3d_registration(rows, source, target, t_gt, args)
+
+    print_rows(rows)
 
 
 if __name__ == "__main__":
