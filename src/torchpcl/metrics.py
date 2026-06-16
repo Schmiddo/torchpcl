@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import torch
 
+from .search import NearestNeighborSearch
 from .transforms import _check_points
 
 # Chunk the (M, N) distance matrix to roughly this many elements
@@ -44,32 +45,19 @@ def _nearest_distances(
     queries: torch.Tensor, points: torch.Tensor, backend: str
 ) -> torch.Tensor:
     """Exact distance from each query to its nearest point (unbounded)."""
-    if backend == "cubql":
-        from .search import NearestNeighborSearch
 
-        # Unbounded BVH search returns the NN index; the distance is then
-        # recomputed in the input dtype. (The search itself runs in
-        # float32, so for float64 inputs an eps-close tie may pick a
-        # different but equidistant neighbor.)
-        indices, _ = NearestNeighborSearch(points, math.inf).query(queries)
-        return (queries - points[indices]).norm(dim=1)
-    out = torch.empty(len(queries), dtype=queries.dtype, device=queries.device)
-    chunk = max(1, _CHUNK_ELEMENTS // len(points))
-    for start in range(0, len(queries), chunk):
-        stop = min(start + chunk, len(queries))
-        # cdist's matmul path loses precision in float32; use it only to
-        # find the index, then recompute the distance exactly.
-        indices = torch.cdist(queries[start:stop], points).argmin(dim=1)
-        out[start:stop] = (queries[start:stop] - points[indices]).norm(dim=1)
-    return out
+    # Unbounded BVH search returns the NN index; the distance is then
+    # recomputed in the input dtype. (The search itself runs in
+    # float32, so for float64 inputs an eps-close tie may pick a
+    # different but equidistant neighbor.)
+    indices, _ = NearestNeighborSearch(points, math.inf).query(queries)
+    return (queries - points[indices]).norm(dim=1)
 
 
 def point_cloud_metrics(
     prediction: torch.Tensor,
     reference: torch.Tensor,
     threshold: float,
-    *,
-    backend: str = "cubql",
 ) -> PointCloudMetrics:
     """Compare a predicted/reconstructed cloud against a reference cloud.
 
@@ -84,8 +72,6 @@ def point_cloud_metrics(
     Returns:
         PointCloudMetrics; distances are in the input units.
     """
-    if backend not in ("torch", "cubql"):
-        raise ValueError(f"unknown backend {backend!r}, expected 'torch' or 'cubql'")
     _check_points(prediction, "prediction")
     _check_points(reference, "reference")
     if len(prediction) == 0 or len(reference) == 0:
@@ -96,8 +82,8 @@ def point_cloud_metrics(
         raise ValueError("threshold must be positive")
     reference = reference.to(prediction.dtype)
 
-    dist_pred = _nearest_distances(prediction, reference, backend)
-    dist_ref = _nearest_distances(reference, prediction, backend)
+    dist_pred = _nearest_distances(prediction, reference)
+    dist_ref = _nearest_distances(reference, prediction)
 
     accuracy = float(dist_pred.mean())
     completion = float(dist_ref.mean())
