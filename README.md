@@ -51,6 +51,12 @@ normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...)
 # reference->prediction; chamfer = accuracy + completion)
 m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
+
+# Differentiable chamfer loss for training (squared L2 by default;
+# squared=False matches chamfer_distance above). Also accepts padded
+# (B, N, 3) batches with per-cloud lengths.
+loss = tp.chamfer_loss(prediction, reference)  # 0-dim; grads flow to both clouds
+loss.backward()
 ```
 
 Points are processed in the input precision (float32 recommended); the cumulative transformation and per-iteration computations are float64.
@@ -68,7 +74,7 @@ uv run pytest -q   # first run JIT-compiles the extensions; CUDA tests
 ### Benchmark
 
 `benchmarks/run_benchmark.py` registers the sample scans in `data/` (source/target + ground-truth `T_target_source.txt`) and reports pose error and wall time.
-It also benchmarks voxel downsampling and normal estimation.
+It also benchmarks voxel downsampling, normal estimation, and the chamfer loss (against a `torch.cdist` brute force).
 Install the benchmark group to compare to small_gicp and open3d.
 Open3D is installed by the benchmark group only on Python 3.12, where its wheels are available; on newer Python versions those rows are skipped.
 

@@ -1,7 +1,7 @@
 """Point cloud registration and processing built on torch and cuBQL."""
 
 from .estimation import PointToPlane, PointToPoint, TransformationEstimation
-from .metrics import PointCloudMetrics, point_cloud_metrics
+from .metrics import PointCloudMetrics, chamfer_loss, point_cloud_metrics
 from .preprocess import estimate_normals, voxel_downsample
 from .registration import evaluate_registration, icp
 from .types import ICPConvergenceCriteria, RegistrationResult
@@ -15,6 +15,7 @@ __all__ = [
     "PointToPoint",
     "RegistrationResult",
     "TransformationEstimation",
+    "chamfer_loss",
     "estimate_normals",
     "evaluate_registration",
     "icp",

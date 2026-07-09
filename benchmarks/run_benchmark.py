@@ -322,6 +322,37 @@ def bench_open3d_preprocess(rows, target_np, args):
     ))
 
 
+def bench_chamfer(rows, source_np, target_np, args, device):
+    sync = torch.cuda.synchronize if device.type == "cuda" else None
+    source = torchpcl.voxel_downsample(torch.from_numpy(source_np).to(device), args.voxel)
+    target = torchpcl.voxel_downsample(torch.from_numpy(target_np).to(device), args.voxel)
+    # The brute-force baseline materializes an N x M distance matrix that is
+    # kept alive for the backward pass, so cap the cloud sizes.
+    max_points = 10_000
+    source = source[:max_points]
+    target = target[:max_points]
+    detail = f"{len(source)} vs {len(target)} points, fwd+bwd"
+
+    def run_torchpcl():
+        prediction = source.detach().requires_grad_()
+        loss = torchpcl.chamfer_loss(prediction, target)
+        loss.backward()
+        return loss
+
+    _, seconds = timed(run_torchpcl, args.repeats, sync=sync)
+    rows.append(("chamfer", f"torchpcl chamfer_loss [{device.type}]", seconds, detail))
+
+    def run_bruteforce():
+        prediction = source.detach().requires_grad_()
+        d2 = torch.cdist(prediction, target).square()
+        loss = d2.min(dim=1).values.mean() + d2.min(dim=0).values.mean()
+        loss.backward()
+        return loss
+
+    _, seconds = timed(run_bruteforce, args.repeats, sync=sync)
+    rows.append(("chamfer", f"torch.cdist brute force [{device.type}]", seconds, detail))
+
+
 def print_rows(rows):
     header = f"{'task':<13} {'method':<52} {'time':>10}  detail"
     print(header)
@@ -332,7 +363,8 @@ def print_rows(rows):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", choices=("all", "registration", "preprocess"), default="all")
+    parser.add_argument("--task", choices=("all", "registration", "preprocess", "chamfer"),
+                        default="all")
     parser.add_argument("--voxel", type=float, default=0.25,
                         help="voxel downsampling resolution")
     parser.add_argument("--normal-k", type=int, default=30,
@@ -360,6 +392,10 @@ def main():
             bench_torchpcl_registration(rows, source, target, t_gt, args, device)
         bench_small_gicp_registration(rows, t_gt, args)
         bench_open3d_registration(rows, source, target, t_gt, args)
+
+    if args.task in {"all", "chamfer"}:
+        for device in torch_devices():
+            bench_chamfer(rows, source, target, args, device)
 
     print_rows(rows)
 
