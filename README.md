@@ -1,38 +1,17 @@
 # torchpcl
 
-Minimal point cloud registration and processing library built on
-[PyTorch](https://pytorch.org) (tensor / linear-algebra backend) and
-[cuBQL](https://github.com/NVIDIA/cuBQL) (BVH build and queries),
-reimplementing the core of Open3D's ICP registration pipeline.
+Minimal point cloud registration and processing library built on [PyTorch](https://pytorch.org) and [cuBQL](https://github.com/NVIDIA/cuBQL), inspired by [Open3D's](https://open3d.org) ICP pipeline.
 
-All spatial search (ICP correspondences, k-NN for normals, metric
-distances) runs on a cuBQL BVH, on **both CPU and CUDA**: the same
-traversal code is compiled as a CUDA extension for GPU tensors and as a
-plain C++ extension (parallelized over torch's intra-op thread pool) for
-CPU tensors.
+All spatial search (ICP correspondences, k-NN for normals, metric distances) runs on a cuBQL BVH, on **both CPU and CUDA**.
 
-For end users:
+## Installation
 
-```bash
-pip install torchpcl
-```
+Requires a C++ compiler and ninja, as well as the CUDA toolkit for GPU acceleration.
+Make sure your CUDA toolkit matches the version used in your PyTorch installation.
 
-For the JIT build toolchain used by the cuBQL extensions:
+The CUDA build targets only the local GPU architecture; set `TORCHPCL_CUDA_ARCH_LIST` to override, `TORCHPCL_CUBQL_DIR` to point at an external cuBQL checkout, or `CUDA_HOME` to choose a toolkit.
+CPU and CUDA may tie-break equidistant neighbors differently, so correspondence indices might differ; poses and metrics should be comparable across devices.
 
-```bash
-git submodule update --init third_party/cuBQL
-uv sync --group dev
-```
-
-Wheel and sdist installs include the extension sources and vendored
-cuBQL headers. The CPU extension needs a C++ compiler and ninja. The CUDA extension
-additionally needs the nvcc/CCCL toolchain from the dev dependency group,
-or a system CUDA toolkit matching `torch.version.cuda`'s major version.
-The CUDA build targets only the local GPU architecture; set
-`TORCHPCL_CUDA_ARCH_LIST` to override, `TORCHPCL_CUBQL_DIR` to point at
-an external cuBQL checkout, or `CUDA_HOME` to choose a toolkit. CPU and
-CUDA may tie-break equidistant neighbors differently; compare poses and
-metrics across devices, not correspondence indices.
 
 ## Usage
 
@@ -74,17 +53,9 @@ m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
 ```
 
-Points are processed in the input precision (float32 recommended); only
-the cumulative transformation and the small per-iteration solves are
-float64. The API mirrors `open3d.t.pipelines.registration.icp`
-semantics: hybrid correspondence search (nearest target point within
-`max_correspondence_distance`), Umeyama solve for point-to-point,
-linearized 6-DOF solve for point-to-plane, convergence on relative
-fitness/RMSE change.
-
-**Deviation from Open3D:** when no correspondences are found, Open3D
-resets the transformation to identity; torchpcl keeps the current
-transformation and returns `converged=False, fitness=0`.
+Points are processed in the input precision (float32 recommended); the cumulative transformation and per-iteration computations are float64.
+The API mirrors `open3d.t.pipelines.registration.icp` semantics.
+When no correspondences are found, Open3D resets the transformation to identity; torchpcl keeps the current transformation and returns `converged=False, fitness=0`.
 
 ## Development
 
@@ -96,31 +67,26 @@ uv run pytest -q   # first run JIT-compiles the extensions; CUDA tests
 
 ### Benchmark
 
-`benchmarks/run_benchmark.py` registers the sample scans in `data/`
-(source/target + ground-truth `T_target_source.txt`) and reports pose
-error and wall time. It also benchmarks voxel downsampling and normal
-estimation. torchpcl rows run with the default dependencies; install the
-benchmark group to add small_gicp and open3d comparison rows. Open3D is
-installed by the benchmark group only on Python 3.12, where its wheels
-are available; on newer Python versions those rows are skipped.
+`benchmarks/run_benchmark.py` registers the sample scans in `data/` (source/target + ground-truth `T_target_source.txt`) and reports pose error and wall time.
+It also benchmarks voxel downsampling and normal estimation.
+Install the benchmark group to compare to small_gicp and open3d.
+Open3D is installed by the benchmark group only on Python 3.12, where its wheels are available; on newer Python versions those rows are skipped.
 
 ```bash
 uv run python benchmarks/run_benchmark.py [--task all] [--voxel 0.25] [--repeats 5]
 uv run --group benchmark python benchmarks/run_benchmark.py
 ```
 
-Registration inputs are voxel-downsampled and normals are estimated
-outside the timed registration loop for each library. Each timed
-registration run includes the library's own search-structure build and
-the full registration from identity.
+Registration inputs are voxel-downsampled and normals are estimated outside the timed registration loop for each library.
+Each timed registration run includes the library's own search-structure build and the full registration from identity.
 
 ### Cross-check against Open3D
 
-`tests/test_open3d_crosscheck.py` compares results against
-`open3d.pipelines.registration.registration_icp` on identical inputs and
-skips when open3d is not importable. To include it:
+`tests/test_open3d_crosscheck.py` compares results against `open3d.pipelines.registration.registration_icp` on identical inputs and skips when open3d is not importable.
+To include it:
 
 ```bash
 uv sync --group dev --group benchmark
 uv run pytest -q tests/test_open3d_crosscheck.py
 ```
+
