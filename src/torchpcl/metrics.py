@@ -6,8 +6,8 @@ Conventions (matching the MVS / surface-reconstruction literature):
   *reference* point (how close the prediction lies to the reference).
 - ``completion``: mean distance from each *reference* point to its
   nearest *prediction* point (how much of the reference is covered).
-- ``chamfer_distance``: ``accuracy + completion`` (sum of the two
-  directed means, unsquared L2).
+- ``chamfer_distance``: mean of ``accuracy`` and ``completion`` (average
+  of the two directed means, unsquared L2).
 - ``precision``: fraction of prediction points within ``threshold`` of
   the reference.
 - ``recall``: fraction of reference points within ``threshold`` of the
@@ -108,7 +108,7 @@ def point_cloud_metrics(
     return PointCloudMetrics(
         accuracy=accuracy,
         completion=completion,
-        chamfer_distance=accuracy + completion,
+        chamfer_distance=(accuracy + completion) / 2,
         precision=precision,
         recall=recall,
         f1_score=f1,
@@ -159,7 +159,7 @@ def _chamfer_pair(
 
     loss = directed(prediction, reference)
     if not single_directional:
-        loss = loss + directed(reference, prediction)
+        loss = (loss + directed(reference, prediction)) / 2
     return loss
 
 
@@ -176,10 +176,10 @@ def chamfer_loss(
     """Differentiable chamfer loss between two point clouds.
 
     Per cloud pair: the mean (squared) distance from each prediction
-    point to its nearest reference point, plus the reverse direction
-    unless ``single_directional``. Gradients flow to both clouds. With
-    ``squared=False`` the unbatched bidirectional loss equals
-    ``point_cloud_metrics(...).chamfer_distance``.
+    point to its nearest reference point, averaged with the reverse
+    direction unless ``single_directional``. Gradients flow to both
+    clouds. With ``squared=False`` the unbatched bidirectional loss
+    equals ``point_cloud_metrics(...).chamfer_distance``.
 
     Args:
         prediction: (N, 3) or padded (B, N, 3) points.

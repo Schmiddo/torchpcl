@@ -345,7 +345,7 @@ def bench_chamfer(rows, source_np, target_np, args, device):
     def run_bruteforce():
         prediction = source.detach().requires_grad_()
         d2 = torch.cdist(prediction, target).square()
-        loss = d2.min(dim=1).values.mean() + d2.min(dim=0).values.mean()
+        loss = (d2.min(dim=1).values.mean() + d2.min(dim=0).values.mean()) / 2
         loss.backward()
         return loss
 

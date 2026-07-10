@@ -12,7 +12,7 @@ def bruteforce_chamfer(prediction, reference, squared):
     bwd = d2.min(dim=0).values
     if not squared:
         fwd, bwd = fwd.sqrt(), bwd.sqrt()
-    return fwd.mean() + bwd.mean()
+    return (fwd.mean() + bwd.mean()) / 2
 
 
 @pytest.mark.parametrize("squared", [True, False])

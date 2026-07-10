@@ -28,7 +28,7 @@ def test_known_shift(search_device):
     m = point_cloud_metrics(prediction, grid, threshold=0.2)
     assert m.accuracy == pytest.approx(shift, abs=1e-7)
     assert m.completion == pytest.approx(shift, abs=1e-7)
-    assert m.chamfer_distance == pytest.approx(2 * shift, abs=1e-7)
+    assert m.chamfer_distance == pytest.approx(shift, abs=1e-7)
     assert m.precision == 1.0 and m.recall == 1.0 and m.f1_score == 1.0
 
     tight = point_cloud_metrics(prediction, grid, threshold=0.05)

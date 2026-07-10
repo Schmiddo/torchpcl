@@ -48,7 +48,7 @@ normals = tp.estimate_normals(down, k=30)            # unbounded k-NN + PCA
 normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...)
 
 # Cloud comparison (accuracy/completion from prediction->reference /
-# reference->prediction; chamfer = accuracy + completion)
+# reference->prediction; chamfer = mean of accuracy and completion)
 m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
 
