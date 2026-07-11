@@ -5,7 +5,7 @@ import torch
 
 # `device` parametrizes pure-torch tests (transforms, estimation, voxel
 # downsampling). Tests touching spatial search use
-# `search_device` instead, which additionally skips when the JIT-compiled
+# `search_device` instead, which additionally skips when the compiled
 # extension for that device is unavailable.
 _DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
@@ -18,22 +18,14 @@ def device(request):
 @functools.cache
 def extension_skip_reason(device_type: str) -> str | None:
     """None if the search extension for device_type is usable, else a
-    skip reason. Cached so each JIT compile (or its failure) happens
-    once per session.
-    """
-    try:
-        if device_type == "cuda":
-            if not torch.cuda.is_available():
-                return "CUDA not available"
-            from torchpcl.search import _load_cuda_extension
+    skip reason."""
+    if device_type == "cuda":
+        if not torch.cuda.is_available():
+            return "CUDA not available"
+        from torchpcl import search
 
-            _load_cuda_extension()
-        else:
-            from torchpcl.search import _load_cpu_extension
-
-            _load_cpu_extension()
-    except Exception as exc:  # noqa: BLE001 - any build failure means skip
-        return f"torchpcl {device_type} extension unavailable: {exc}"
+        if search._cubql_cuda is None:
+            return "torchpcl was installed without the CUDA extension"
     return None
 
 

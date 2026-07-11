@@ -6,10 +6,15 @@ All spatial search (ICP correspondences, k-NN for normals, metric distances) run
 
 ## Installation
 
-Requires a C++ compiler and ninja, as well as the CUDA toolkit for GPU acceleration.
-Make sure your CUDA toolkit matches the version used in your PyTorch installation.
+The C++/CUDA search extensions are compiled at install time by `setup.py` against the torch in your environment, so install with build isolation disabled and torch already present:
 
-The CUDA build targets only the local GPU architecture; set `TORCHPCL_CUDA_ARCH_LIST` to override, `TORCHPCL_CUBQL_DIR` to point at an external cuBQL checkout, or `CUDA_HOME` to choose a toolkit.
+```bash
+pip install --no-build-isolation .
+```
+
+Requires a C++ compiler; for GPU acceleration a CUDA toolkit with `nvcc` matching your torch's CUDA version must be visible (the pip toolchain from the dev dependency group, or `CUDA_HOME`). Without a toolkit the CUDA extension is skipped and torchpcl runs CPU-only.
+
+The CUDA build targets only the local GPU architecture; set `TORCHPCL_CUDA_ARCH_LIST` to override, or `TORCHPCL_CUBQL_DIR` to point at an external cuBQL checkout.
 CPU and CUDA may tie-break equidistant neighbors differently, so correspondence indices might differ; poses and metrics should be comparable across devices.
 
 
@@ -66,10 +71,12 @@ When no correspondences are found, Open3D resets the transformation to identity;
 ## Development
 
 ```bash
-uv sync --group dev
-uv run pytest -q   # first run JIT-compiles the extensions; CUDA tests
-                   # skip automatically on machines without a GPU
+uv sync --group dev   # builds the extensions (no build isolation for torchpcl)
+uv run pytest -q      # CUDA tests skip automatically on machines without a GPU
 ```
+
+After touching `src/torchpcl/csrc` (or the cuBQL headers), rebuild the extensions with `uv sync --reinstall-package torchpcl`.
+If a fresh clone fails to build because torch is not installed yet, run `uv sync --no-install-project` once first.
 
 ### Benchmark
 

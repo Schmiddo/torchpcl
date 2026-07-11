@@ -112,14 +112,3 @@ def test_unsupported_device_rejected():
     points = torch.zeros(10, 3)
     with pytest.raises(RuntimeError, match="unsupported device"):
         NearestNeighborSearch(points.to("meta"), 0.1)
-
-
-def test_extension_load_failure_propagates(monkeypatch):
-    def fail():
-        raise RuntimeError("synthetic extension failure")
-
-    monkeypatch.setattr("torchpcl.search._load_cpu_extension", fail)
-    points = torch.zeros(10, 3)
-
-    with pytest.raises(RuntimeError, match="synthetic extension failure"):
-        NearestNeighborSearch(points, math.inf)
