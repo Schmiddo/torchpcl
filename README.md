@@ -45,16 +45,16 @@ result = tp.icp(source, target, max_correspondence_distance=0.1)
 # Point-to-plane (requires target normals)
 result = tp.icp(
     source, target, 0.1,
-    estimation=tp.PointToPlane(),
+    method="point_to_plane",
     target_normals=normals,                      # (M, 3)
-    criteria=tp.ICPConvergenceCriteria(max_iteration=50),
+    max_iterations=50,
 )
 
-result.transformation   # (4, 4) float64 source-to-target
-result.fitness          # inliers / N
-result.inlier_rmse
-result.converged
-result.correspondences  # (N,) int64 target index, -1 = none
+result.transforms       # (B, 4, 4) source-to-target transforms
+result.fitness          # (B,) inliers / source length
+result.inlier_rmse      # (B,)
+result.converged        # (B,)
+result.iterations       # (B,)
 
 # Evaluate a given transformation without iterating
 tp.evaluate_registration(source, target, 0.1, transformation)
@@ -105,7 +105,9 @@ Padded batches can be converted explicitly with
 The packed API supports float32 and float64 geometry. Legacy ICP currently
 keeps its cumulative transformation and per-iteration computations in float64.
 The API mirrors `open3d.t.pipelines.registration.icp` semantics.
-When no correspondences are found, Open3D resets the transformation to identity; torchpcl keeps the current transformation and returns `converged=False, fitness=0`.
+ICP correspondences remain internal and are not returned. When a batch entry
+cannot be solved, torchpcl keeps its last valid transform and returns
+`converged=False` for that entry.
 
 ## Development
 

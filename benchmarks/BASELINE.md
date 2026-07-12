@@ -60,3 +60,17 @@ metadata, recompute search distances in the input dtype, and use the shared
 `torch.linalg.eigh` implementation. These absolute costs are accepted for the
 initial maintainable implementation and remain candidates for profiling after
 batched ICP is complete.
+
+## Phase 6 ICP Comparison
+
+The correspondence-free batched ICP implementation reports the following CPU
+times on the same data and settings:
+
+| Method | Baseline | Batched ICP | Change |
+| --- | ---: | ---: | ---: |
+| Point-to-point | 8.13 ms | 15.50 ms | 1.91x |
+| Point-to-plane | 8.06 ms | 13.13 ms | 1.63x |
+
+The new path keeps per-batch state and solves on the input device. It reads one
+aggregate active flag per iteration to stop after all entries finish; without
+that check, a fixed 50-iteration benchmark took approximately 61-63 ms.

@@ -70,6 +70,19 @@ def transform(
     dtype = torch.promote_types(cloud.dtype, transformations.dtype)
     points = cloud.points.to(dtype)
     matrices = transformations.to(dtype)
+    if cloud.batch_size == 1:
+        rotation = matrices[0, :3, :3]
+        transformed_points = points @ rotation.T + matrices[0, :3, 3]
+        transformed_normals = None
+        if cloud.normals is not None:
+            transformed_normals = cloud.normals.to(dtype) @ rotation.T
+        return PointCloud._from_validated(
+            transformed_points,
+            cloud.offsets,
+            transformed_normals,
+            cloud.features,
+        )
+
     ids = batch_ids(cloud.offsets, cloud.points.shape[0])
     rotations = matrices[ids, :3, :3]
     translations = matrices[ids, :3, 3]

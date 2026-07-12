@@ -1,183 +1,438 @@
-"""Single-scale ICP registration loop and evaluation."""
+"""Batched single-scale iterative closest point registration."""
 
-import math
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 
-from .estimation import PointToPoint, TransformationEstimation
-from .search import NearestNeighborSearch
-from .transforms import _check_points, transform_points
-from .types import ICPConvergenceCriteria, RegistrationResult
+from .cloud import PointCloud, batch_ids
+from .neighbors import NeighborIndex
+from .transforms import transform
+from .types import ICPResult
+
+
+@dataclass(frozen=True, eq=False)
+class _Evaluation:
+    current: torch.Tensor
+    target: torch.Tensor
+    indices: torch.Tensor
+    valid: torch.Tensor
+    counts: torch.Tensor
+    fitness: torch.Tensor
+    rmse: torch.Tensor
+
+
+def _as_cloud(value: torch.Tensor | PointCloud, name: str) -> PointCloud:
+    if isinstance(value, PointCloud):
+        return value
+    if isinstance(value, torch.Tensor):
+        return PointCloud.from_points(value)
+    raise TypeError(f"{name} must be a torch.Tensor or PointCloud")
+
+
+def _segment_sum(
+    values: torch.Tensor,
+    ids: torch.Tensor,
+    batch_size: int,
+) -> torch.Tensor:
+    if batch_size == 1:
+        return values.sum(dim=0, keepdim=True)
+    output = values.new_zeros((batch_size, *values.shape[1:]))
+    output.index_add_(0, ids, values)
+    return output
+
+
+def _prepare_inputs(
+    source: torch.Tensor | PointCloud,
+    target: torch.Tensor | PointCloud,
+    max_distance: float,
+) -> tuple[PointCloud, PointCloud]:
+    source_cloud = _as_cloud(source, "source")
+    target_cloud = _as_cloud(target, "target")
+    if source_cloud.batch_size != target_cloud.batch_size:
+        raise ValueError("source and target must have the same batch size")
+    if source_cloud.device != target_cloud.device:
+        raise ValueError("source and target must be on the same device")
+    if source_cloud.dtype != target_cloud.dtype:
+        raise ValueError("source and target must have the same dtype")
+    if max_distance <= 0:
+        raise ValueError("max_distance must be positive")
+    empty = torch.any((source_cloud.lengths == 0) | (target_cloud.lengths == 0))
+    if bool(empty):
+        raise ValueError("source and target batches must be non-empty")
+    return source_cloud, target_cloud
+
+
+def _initial_transforms(
+    cloud: PointCloud,
+    init: torch.Tensor | None,
+) -> torch.Tensor:
+    if init is None:
+        return torch.eye(4, dtype=cloud.dtype, device=cloud.device).repeat(
+            cloud.batch_size, 1, 1
+        )
+    if not isinstance(init, torch.Tensor):
+        raise TypeError("init must be a torch.Tensor")
+    if init.shape == (4, 4):
+        init = init.unsqueeze(0).expand(cloud.batch_size, -1, -1)
+    elif init.shape != (cloud.batch_size, 4, 4):
+        raise ValueError(
+            f"init must have shape (4, 4) or ({cloud.batch_size}, 4, 4)"
+        )
+    return init.to(device=cloud.device, dtype=cloud.dtype).clone()
+
+
+def _target_normals(
+    target: PointCloud,
+    normals: torch.Tensor | None,
+    method: str,
+) -> torch.Tensor | None:
+    if normals is None:
+        normals = target.normals
+    if method == "point_to_plane" and normals is None:
+        raise ValueError("point_to_plane requires target_normals")
+    if normals is None:
+        return None
+    if not isinstance(normals, torch.Tensor) or normals.shape != target.points.shape:
+        raise ValueError("target_normals must have shape (P, 3)")
+    if normals.device != target.device or normals.dtype != target.dtype:
+        raise ValueError("target_normals must match the target device and dtype")
+    return normals
 
 
 def _evaluate(
-    nns: NearestNeighborSearch,
-    points: torch.Tensor,
-    transformation: torch.Tensor,
-) -> tuple[RegistrationResult, torch.Tensor]:
-    """Compute correspondences and metrics for the given transformation.
-
-    Returns the result and the inlier mask over the source points.
-    """
-    indices, dist2 = nns.query(points)
-    mask = indices >= 0
-    # Unmatched slots hold radius^2, so zero them before summing; one
-    # stacked transfer keeps this at a single host sync per iteration.
-    stats = torch.stack(
-        [mask.sum().to(torch.float64), (dist2.to(torch.float64) * mask).sum()]
-    ).cpu()
-    num_inliers = int(stats[0])
-    fitness = num_inliers / len(points)
-    inlier_rmse = math.sqrt(float(stats[1]) / num_inliers) if num_inliers > 0 else 0.0
-    result = RegistrationResult(
-        transformation=transformation.clone(),
-        correspondences=indices,
-        fitness=fitness,
-        inlier_rmse=inlier_rmse,
+    source: PointCloud,
+    target: PointCloud,
+    index: NeighborIndex,
+    transforms: torch.Tensor,
+    max_distance: float,
+    source_ids: torch.Tensor,
+) -> _Evaluation:
+    current_cloud = transform(source, transforms)
+    assert isinstance(current_cloud, PointCloud)
+    neighbors = index.hybrid(current_cloud, max_distance, 1)
+    indices = neighbors.indices[:, 0]
+    valid = neighbors.valid[:, 0]
+    target_points = target.points[indices.clamp(min=0)]
+    distances2 = neighbors.distances2[:, 0].masked_fill(~valid, 0)
+    counts = _segment_sum(valid.to(torch.int64), source_ids, source.batch_size)
+    squared_error = _segment_sum(distances2, source_ids, source.batch_size)
+    fitness = counts.to(source.dtype) / source.lengths.to(source.dtype)
+    rmse = torch.where(
+        counts > 0,
+        (squared_error / counts.clamp(min=1).to(source.dtype)).sqrt(),
+        torch.zeros_like(squared_error),
     )
-    return result, mask
+    return _Evaluation(
+        current=current_cloud.points,
+        target=target_points,
+        indices=indices,
+        valid=valid,
+        counts=counts,
+        fitness=fitness,
+        rmse=rmse,
+    )
 
 
-def _validate_inputs(
-    source: torch.Tensor,
-    target: torch.Tensor,
-    max_correspondence_distance: float,
-    estimation: TransformationEstimation,
-    target_normals: torch.Tensor | None,
-) -> None:
-    _check_points(source, "source")
-    _check_points(target, "target")
-    if len(source) == 0 or len(target) == 0:
-        raise ValueError("source and target must be non-empty")
-    if source.device != target.device:
-        raise ValueError(
-            f"source and target must be on the same device, "
-            f"got {source.device} and {target.device}"
+def _robust_weights(
+    residual_magnitude: torch.Tensor,
+    valid: torch.Tensor,
+    active: torch.Tensor,
+    ids: torch.Tensor,
+    robust_kernel: str | None,
+    robust_delta: float,
+) -> torch.Tensor:
+    weights = (valid & active[ids]).to(residual_magnitude.dtype)
+    if robust_kernel == "huber":
+        magnitude = residual_magnitude.clamp_min(
+            torch.finfo(residual_magnitude.dtype).tiny
         )
-    if max_correspondence_distance <= 0:
-        raise ValueError("max_correspondence_distance must be positive")
-    if estimation.requires_normals:
-        if target_normals is None:
-            raise ValueError(
-                f"{type(estimation).__name__} requires target_normals"
-            )
-        _check_points(target_normals, "target_normals")
-        if target_normals.shape != target.shape:
-            raise ValueError(
-                "target_normals must have the same shape as target, "
-                f"got {tuple(target_normals.shape)} and {tuple(target.shape)}"
-            )
-        if target_normals.device != target.device:
-            raise ValueError("target_normals must be on the same device as target")
+        huber = torch.where(
+            residual_magnitude <= robust_delta,
+            torch.ones_like(magnitude),
+            robust_delta / magnitude,
+        )
+        weights = weights * huber
+    return weights
 
 
+def _point_to_point_delta(
+    evaluation: _Evaluation,
+    active: torch.Tensor,
+    ids: torch.Tensor,
+    batch_size: int,
+    robust_kernel: str | None,
+    robust_delta: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    residual = (evaluation.current - evaluation.target).norm(dim=1)
+    weights = _robust_weights(
+        residual,
+        evaluation.valid,
+        active,
+        ids,
+        robust_kernel,
+        robust_delta,
+    )
+    weight_sum = _segment_sum(weights, ids, batch_size).clamp_min(
+        torch.finfo(weights.dtype).tiny
+    )
+    source_mean = _segment_sum(
+        evaluation.current * weights[:, None], ids, batch_size
+    ) / weight_sum[:, None]
+    target_mean = _segment_sum(
+        evaluation.target * weights[:, None], ids, batch_size
+    ) / weight_sum[:, None]
+    centered_source = evaluation.current - source_mean[ids]
+    centered_target = evaluation.target - target_mean[ids]
+    covariance = centered_source[:, :, None] * centered_target[:, None, :]
+    covariance = _segment_sum(
+        covariance * weights[:, None, None], ids, batch_size
+    )
+
+    u, _, vh = torch.linalg.svd(covariance)
+    v = vh.transpose(1, 2)
+    determinant = torch.linalg.det(v @ u.transpose(1, 2))
+    correction = torch.eye(
+        3, dtype=covariance.dtype, device=covariance.device
+    ).repeat(batch_size, 1, 1)
+    correction[:, 2, 2] = determinant
+    rotation = v @ correction @ u.transpose(1, 2)
+    translation = target_mean - (rotation @ source_mean[:, :, None]).squeeze(-1)
+    delta = _rigid_matrices(rotation, translation)
+    solvable = active & (evaluation.counts >= 3) & torch.isfinite(delta).all(
+        dim=(1, 2)
+    )
+    return delta, solvable
+
+
+def _point_to_plane_delta(
+    evaluation: _Evaluation,
+    normals: torch.Tensor,
+    active: torch.Tensor,
+    ids: torch.Tensor,
+    batch_size: int,
+    robust_kernel: str | None,
+    robust_delta: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    matched_normals = normals[evaluation.indices.clamp(min=0)]
+    residual = ((evaluation.current - evaluation.target) * matched_normals).sum(
+        dim=1
+    )
+    weights = _robust_weights(
+        residual.abs(),
+        evaluation.valid,
+        active,
+        ids,
+        robust_kernel,
+        robust_delta,
+    )
+    jacobian = torch.cat(
+        [torch.linalg.cross(evaluation.current, matched_normals), matched_normals],
+        dim=1,
+    )
+    jtj = _segment_sum(
+        jacobian[:, :, None] * jacobian[:, None, :] * weights[:, None, None],
+        ids,
+        batch_size,
+    )
+    jtr = _segment_sum(
+        jacobian * residual[:, None] * weights[:, None], ids, batch_size
+    )
+    pose, info = torch.linalg.solve_ex(jtj, -jtr)
+    delta = _poses_to_matrices(pose)
+    solvable = (
+        active
+        & (evaluation.counts >= 6)
+        & (info == 0)
+        & torch.isfinite(delta).all(dim=(1, 2))
+    )
+    return delta, solvable
+
+
+def _rigid_matrices(
+    rotation: torch.Tensor,
+    translation: torch.Tensor,
+) -> torch.Tensor:
+    upper = torch.cat([rotation, translation[:, :, None]], dim=2)
+    bottom = rotation.new_tensor([0.0, 0.0, 0.0, 1.0]).expand(
+        rotation.shape[0], 1, 4
+    )
+    return torch.cat([upper, bottom], dim=1)
+
+
+def _poses_to_matrices(pose: torch.Tensor) -> torch.Tensor:
+    rx, ry, rz = pose[:, 0], pose[:, 1], pose[:, 2]
+    cx, sx = torch.cos(rx), torch.sin(rx)
+    cy, sy = torch.cos(ry), torch.sin(ry)
+    cz, sz = torch.cos(rz), torch.sin(rz)
+    row0 = torch.stack(
+        [cz * cy, -sz * cx + cz * sy * sx, sz * sx + cz * sy * cx], dim=1
+    )
+    row1 = torch.stack(
+        [sz * cy, cz * cx + sz * sy * sx, -cz * sx + sz * sy * cx], dim=1
+    )
+    row2 = torch.stack([-sy, cy * sx, cy * cx], dim=1)
+    rotation = torch.stack([row0, row1, row2], dim=1)
+    return _rigid_matrices(rotation, pose[:, 3:])
+
+
+@torch.no_grad()
 def icp(
-    source: torch.Tensor,
-    target: torch.Tensor,
-    max_correspondence_distance: float,
+    source: torch.Tensor | PointCloud,
+    target: torch.Tensor | PointCloud,
+    max_distance: float,
     *,
     init: torch.Tensor | None = None,
-    estimation: TransformationEstimation | None = None,
-    criteria: ICPConvergenceCriteria = ICPConvergenceCriteria(),
+    method: str = "point_to_point",
     target_normals: torch.Tensor | None = None,
-) -> RegistrationResult:
-    """Register source to target with single-scale ICP.
+    max_iterations: int = 30,
+    relative_fitness: float = 1e-6,
+    relative_rmse: float = 1e-6,
+    robust_kernel: str | None = None,
+    robust_delta: float = 1.0,
+    index: NeighborIndex | None = None,
+) -> ICPResult:
+    """Register packed source clouds to corresponding target clouds.
 
-    Args:
-        source: (N, 3) source points.
-        target: (M, 3) target points.
-        max_correspondence_distance: Correspondence search radius.
-        init: Optional (4, 4) initial source-to-target transformation.
-        estimation: Transformation estimation method (default PointToPoint).
-        criteria: Convergence criteria.
-        target_normals: (M, 3) target normals, required for PointToPlane.
-
-    Note: if at any iteration no correspondences are found, the current
-    transformation is kept and the result has converged=False, fitness=0
-    (Open3D resets to identity in this case; we deliberately do not).
+    Each batch entry converges or fails independently. Failed entries retain
+    their last valid transform. Correspondences are internal and are not
+    returned or retained in the result.
     """
-    estimation = estimation if estimation is not None else PointToPoint()
-    _validate_inputs(source, target, max_correspondence_distance, estimation, target_normals)
+    source_cloud, target_cloud = _prepare_inputs(source, target, max_distance)
+    if method not in {"point_to_point", "point_to_plane"}:
+        raise ValueError("method must be 'point_to_point' or 'point_to_plane'")
+    if not isinstance(max_iterations, int) or max_iterations < 0:
+        raise ValueError("max_iterations must be a nonnegative integer")
+    if relative_fitness < 0 or relative_rmse < 0:
+        raise ValueError("convergence thresholds must be nonnegative")
+    if robust_kernel not in {None, "huber"}:
+        raise ValueError("robust_kernel must be None or 'huber'")
+    if robust_delta <= 0:
+        raise ValueError("robust_delta must be positive")
+    normals = _target_normals(target_cloud, target_normals, method)
+    transforms = _initial_transforms(source_cloud, init)
+    if index is None:
+        index = NeighborIndex(target_cloud)
+    elif index.reference.points.data_ptr() != target_cloud.points.data_ptr():
+        raise ValueError("index must have been built for target")
 
-    device = source.device
-    # Points are kept in the input precision; only the cumulative
-    # transformation and the small solves (in estimation) are float64.
-    source_pts = source.contiguous()
-    target_pts = target.to(source.dtype).contiguous()
-    normals_pts = (
-        target_normals.to(source.dtype).contiguous() if target_normals is not None else None
+    batch_size = source_cloud.batch_size
+    source_ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
+    active = torch.ones(batch_size, dtype=torch.bool, device=source_cloud.device)
+    converged = torch.zeros_like(active)
+    iterations = torch.zeros(
+        batch_size, dtype=torch.int64, device=source_cloud.device
     )
-    if init is not None:
-        transformation = init.to(device=device, dtype=torch.float64).clone()
-    else:
-        transformation = torch.eye(4, dtype=torch.float64, device=device)
+    previous_fitness = torch.zeros(
+        batch_size, dtype=source_cloud.dtype, device=source_cloud.device
+    )
+    previous_rmse = torch.zeros_like(previous_fitness)
+    minimum = 3 if method == "point_to_point" else 6
 
-    nns = NearestNeighborSearch(target_pts, max_correspondence_distance)
-    current = transform_points(source_pts, transformation)
-
-    prev_fitness = 0.0
-    prev_inlier_rmse = 0.0
-    converged = False
-    num_iterations = 0
-    for iteration in range(criteria.max_iteration):
-        result, mask = _evaluate(nns, current, transformation)
-
-        if result.fitness <= 0.0:
-            result.converged = False
-            result.num_iterations = num_iterations
-            return result
-
-        if (
-            iteration > 0
-            and abs(prev_fitness - result.fitness) < criteria.relative_fitness
-            and abs(prev_inlier_rmse - result.inlier_rmse) < criteria.relative_rmse
-        ):
-            converged = True
-            break
-        prev_fitness = result.fitness
-        prev_inlier_rmse = result.inlier_rmse
-
-        inlier_indices = result.correspondences[mask]
-        delta = estimation.compute_transformation(
-            current[mask],
-            target_pts[inlier_indices],
-            normals_pts[inlier_indices] if normals_pts is not None else None,
+    for iteration in range(max_iterations):
+        evaluation = _evaluate(
+            source_cloud,
+            target_cloud,
+            index,
+            transforms,
+            max_distance,
+            source_ids,
         )
-        transformation = delta @ transformation
-        # Re-apply the full float64 transformation to the original points
-        # rather than chaining deltas, so float32 rounding does not drift.
-        current = transform_points(source_pts, transformation)
-        num_iterations += 1
+        active = active & (evaluation.counts >= minimum)
+        if iteration > 0:
+            stable = (
+                (evaluation.fitness - previous_fitness).abs() < relative_fitness
+            ) & ((evaluation.rmse - previous_rmse).abs() < relative_rmse)
+            newly_converged = active & stable
+            converged = converged | newly_converged
+            active = active & ~newly_converged
 
-    # Recompute metrics for the final transformation (matches Open3D,
-    # which re-evaluates after the iteration loop ends).
-    result, _ = _evaluate(nns, current, transformation)
-    result.converged = converged
-    result.num_iterations = num_iterations
-    return result
+        if method == "point_to_point":
+            delta, solvable = _point_to_point_delta(
+                evaluation,
+                active,
+                source_ids,
+                batch_size,
+                robust_kernel,
+                robust_delta,
+            )
+        else:
+            assert normals is not None
+            delta, solvable = _point_to_plane_delta(
+                evaluation,
+                normals,
+                active,
+                source_ids,
+                batch_size,
+                robust_kernel,
+                robust_delta,
+            )
+        update = active & solvable
+        candidate = delta @ transforms
+        transforms = torch.where(update[:, None, None], candidate, transforms)
+        iterations = iterations + update.to(torch.int64)
+        active = update
+        previous_fitness = evaluation.fitness
+        previous_rmse = evaluation.rmse
+        # The scalar check synchronizes CUDA once per iteration, but avoids
+        # continuing expensive searches up to max_iterations after every batch
+        # entry has converged or failed.
+        if not bool(active.any()):
+            break
+
+    final = _evaluate(
+        source_cloud,
+        target_cloud,
+        index,
+        transforms,
+        max_distance,
+        source_ids,
+    )
+    return ICPResult(
+        transforms=transforms,
+        converged=converged,
+        iterations=iterations,
+        fitness=final.fitness,
+        inlier_rmse=final.rmse,
+    )
 
 
+@torch.no_grad()
 def evaluate_registration(
-    source: torch.Tensor,
-    target: torch.Tensor,
-    max_correspondence_distance: float,
-    transformation: torch.Tensor | None = None,
-) -> RegistrationResult:
-    """Compute fitness/inlier RMSE of a transformation without iterating."""
-    _check_points(source, "source")
-    _check_points(target, "target")
-    if len(source) == 0 or len(target) == 0:
-        raise ValueError("source and target must be non-empty")
-    if max_correspondence_distance <= 0:
-        raise ValueError("max_correspondence_distance must be positive")
+    source: torch.Tensor | PointCloud,
+    target: torch.Tensor | PointCloud,
+    max_distance: float,
+    transforms: torch.Tensor | None = None,
+    *,
+    index: NeighborIndex | None = None,
+) -> ICPResult:
+    """Evaluate source-to-target transforms without performing ICP updates."""
+    source_cloud, target_cloud = _prepare_inputs(source, target, max_distance)
+    matrices = _initial_transforms(source_cloud, transforms)
+    if index is None:
+        index = NeighborIndex(target_cloud)
+    source_ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
+    evaluation = _evaluate(
+        source_cloud,
+        target_cloud,
+        index,
+        matrices,
+        max_distance,
+        source_ids,
+    )
+    batch_size = source_cloud.batch_size
+    return ICPResult(
+        transforms=matrices,
+        converged=torch.zeros(
+            batch_size, dtype=torch.bool, device=source_cloud.device
+        ),
+        iterations=torch.zeros(
+            batch_size, dtype=torch.int64, device=source_cloud.device
+        ),
+        fitness=evaluation.fitness,
+        inlier_rmse=evaluation.rmse,
+    )
 
-    source_pts = source.contiguous()
-    target_pts = target.to(source.dtype).contiguous()
-    if transformation is not None:
-        transformation = transformation.to(device=source.device, dtype=torch.float64)
-    else:
-        transformation = torch.eye(4, dtype=torch.float64, device=source.device)
 
-    nns = NearestNeighborSearch(target_pts, max_correspondence_distance)
-    result, _ = _evaluate(nns, transform_points(source_pts, transformation), transformation)
-    return result
+__all__ = ["ICPResult", "evaluate_registration", "icp"]

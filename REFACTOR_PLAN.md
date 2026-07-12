@@ -158,7 +158,6 @@ class ICPResult:
     iterations: Tensor          # (B,), integer
     fitness: Tensor             # (B,)
     inlier_rmse: Tensor         # (B,)
-    correspondences: Neighbors | None
 ```
 
 Result dataclasses contain tensors and metadata only. They must not trigger a
@@ -384,14 +383,17 @@ piecewise-differentiable gathered distances.
 Favor a readable PyTorch loop over iterations. Fuse kernels only if later
 profiling identifies a compelling bottleneck.
 
+Status: implemented on 2026-07-12. Correspondences remain internal and are not
+part of `ICPResult`. The loop reads one aggregate active flag per iteration to
+avoid running searches after all batch entries have converged or failed.
+
 ### Tasks
 
 1. Define a functional API with simple values rather than estimator classes:
    - `method="point_to_point" | "point_to_plane"`;
    - `max_distance`, `max_iterations`, `relative_fitness`, `relative_rmse`;
    - optional per-batch initial transforms;
-   - optional target normals;
-   - `return_correspondences` flag.
+   - optional target normals.
 2. Build or accept a reusable target `NeighborIndex` once per call.
 3. Track active batch elements with a boolean tensor. Converged or failed batch
    entries stop updating while other entries continue.

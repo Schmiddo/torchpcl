@@ -14,7 +14,7 @@ import torch
 o3d = pytest.importorskip("open3d")
 
 # Imports below run only when open3d is available.
-from torchpcl import ICPConvergenceCriteria, PointToPlane, PointToPoint, icp  # noqa: E402
+from torchpcl import icp  # noqa: E402
 from torchpcl.transforms import transform_points  # noqa: E402
 
 from conftest import random_cloud, random_rigid_transform  # noqa: E402
@@ -35,21 +35,19 @@ def test_matches_open3d(estimation_name, search_device):
     if estimation_name == "point_to_plane":
         gen = torch.Generator().manual_seed(2)
         normals = torch.randn((1000, 3), generator=gen, dtype=torch.float64)
-        normals = normals / normals.norm(dim=1, keepdim=True)
+        normals = (normals / normals.norm(dim=1, keepdim=True)).to(device)
     else:
         normals = None
     gt = random_rigid_transform(max_angle=0.05, max_translation=0.02, seed=1, device=device)
     source = transform_points(target, torch.linalg.inv(gt))
     max_dist = 0.1
-    criteria = ICPConvergenceCriteria(max_iteration=30)
-
     if estimation_name == "point_to_point":
-        ours = icp(source, target, max_dist, estimation=PointToPoint(), criteria=criteria)
+        ours = icp(source, target, max_dist, method="point_to_point", max_iterations=30)
         o3d_est = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     else:
         ours = icp(
             source, target, max_dist,
-            estimation=PointToPlane(), target_normals=normals, criteria=criteria,
+            method="point_to_plane", target_normals=normals, max_iterations=30,
         )
         o3d_est = o3d.pipelines.registration.TransformationEstimationPointToPlane()
 
@@ -62,8 +60,8 @@ def test_matches_open3d(estimation_name, search_device):
         o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=30),
     )
 
-    assert ours.fitness == pytest.approx(theirs.fitness, abs=1e-5)
-    assert ours.inlier_rmse == pytest.approx(theirs.inlier_rmse, abs=1e-5)
+    assert ours.fitness[0].item() == pytest.approx(theirs.fitness, abs=1e-5)
+    assert ours.inlier_rmse[0].item() == pytest.approx(theirs.inlier_rmse, abs=1e-5)
     np.testing.assert_allclose(
-        ours.transformation.cpu().numpy(), theirs.transformation, atol=1e-5
+        ours.transforms[0].cpu().numpy(), theirs.transformation, atol=1e-5
     )

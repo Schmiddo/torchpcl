@@ -1,7 +1,6 @@
 """Point cloud registration and processing built on torch and cuBQL."""
 
 from .cloud import PointCloud
-from .estimation import PointToPlane, PointToPoint, TransformationEstimation
 from .metrics import (
     FScoreResult,
     PointCloudMetrics,
@@ -20,7 +19,7 @@ from .neighbors import (
 )
 from .normals import NormalResult, estimate_normals
 from .registration import evaluate_registration, icp
-from .types import ICPConvergenceCriteria, RegistrationResult
+from .types import ICPResult
 from .transforms import transform
 from .voxel import Voxelization, voxel_downsample, voxelize
 
@@ -28,16 +27,12 @@ __version__ = "0.2.0.dev0"
 
 __all__ = [
     "FScoreResult",
-    "ICPConvergenceCriteria",
+    "ICPResult",
     "NeighborIndex",
     "Neighbors",
     "NormalResult",
     "PointCloud",
     "PointCloudMetrics",
-    "PointToPlane",
-    "PointToPoint",
-    "RegistrationResult",
-    "TransformationEstimation",
     "Voxelization",
     "chamfer_distance",
     "chamfer_loss",

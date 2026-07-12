@@ -108,27 +108,30 @@ def bench_torchpcl_registration(rows, source_np, target_np, t_gt, args, device):
     source_down = torchpcl.voxel_downsample(source, args.voxel)
     target_down = torchpcl.voxel_downsample(target, args.voxel)
     normals = torchpcl.estimate_normals(target_down, k=args.normal_k).normals
-    criteria = torchpcl.ICPConvergenceCriteria(max_iteration=args.max_iters)
-
     methods = {
-        "point-to-point": dict(estimation=torchpcl.PointToPoint()),
-        "point-to-plane": dict(estimation=torchpcl.PointToPlane(), target_normals=normals),
+        "point-to-point": dict(method="point_to_point"),
+        "point-to-plane": dict(method="point_to_plane", target_normals=normals),
     }
     for name, kwargs in methods.items():
         result, seconds = timed(
             lambda kwargs=kwargs: torchpcl.icp(
-                source_down, target_down, args.max_corr_dist, criteria=criteria, **kwargs
+                source_down,
+                target_down,
+                args.max_corr_dist,
+                max_iterations=args.max_iters,
+                **kwargs,
             ),
             args.repeats,
             device=device,
         )
-        rot_err, trans_err = pose_errors(result.transformation.cpu().numpy(), t_gt)
+        rot_err, trans_err = pose_errors(result.transforms[0].cpu().numpy(), t_gt)
         rows.append((
             "registration",
             f"torchpcl {name} [{device.type}]",
             seconds,
             f"rot {rot_err:.4f} deg, trans {trans_err:.4f} m, "
-            f"iters {result.num_iterations}, conv {'yes' if result.converged else 'no'}",
+            f"iters {result.iterations[0].item()}, "
+            f"conv {'yes' if result.converged[0].item() else 'no'}",
         ))
 
 
