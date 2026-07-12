@@ -1,160 +1,202 @@
 # torchpcl
 
-Minimal point cloud registration and processing library built on [PyTorch](https://pytorch.org) and [cuBQL](https://github.com/NVIDIA/cuBQL), inspired by [Open3D's](https://open3d.org) ICP pipeline.
+Tensor-first point-cloud processing for PyTorch, with exact CPU and CUDA
+neighbor search and packed ragged batching.
 
-## Architecture
-
-torchpcl is being refactored toward a packed, ragged-batch API shared by search,
-voxelization, normal estimation, metrics, and ICP. The target API, implementation
-phases, and completion gates are documented in [REFACTOR_PLAN.md](REFACTOR_PLAN.md).
-The current public API remains available while the initial scaffold is built.
-
-Spatial search supports cuBQL BVHs and an exact tiled brute-force k-NN backend
-on **both CPU and CUDA**.
+The focused public API covers neighbor search, voxelization, normal estimation,
+point-cloud metrics, and single- or multi-scale ICP. See the [API reference](docs/api.md),
+[batching guide](docs/batching.md), and [migration guide](MIGRATION.md).
 
 ## Installation
 
-The C++/CUDA search extensions are compiled at install time by `setup.py` against the torch in your environment, so install with build isolation disabled and torch already present:
+Extensions are compiled at installation time against the PyTorch in the active
+environment. Build isolation must be disabled:
 
 ```bash
 pip install --no-build-isolation .
 ```
 
-Requires a C++ compiler; for GPU acceleration a CUDA toolkit with `nvcc` matching your torch's CUDA version must be visible (the pip toolchain from the dev dependency group, or `CUDA_HOME`). Without a toolkit the CUDA extension is skipped and torchpcl runs CPU-only.
+A CUDA build requires `CUDA_HOME` to point to a toolkit compatible with the
+installed PyTorch. For a CPU-only build:
 
-The CUDA build targets only the local GPU architecture; set `TORCHPCL_CUDA_ARCH_LIST` to override, or `TORCHPCL_CUBQL_DIR` to point at an external cuBQL checkout.
-CPU and CUDA may tie-break equidistant neighbors differently, so correspondence indices might differ; poses and metrics should be comparable across devices.
+```bash
+TORCHPCL_CPU_ONLY=1 pip install --no-build-isolation .
+```
 
-The low-level `NearestNeighborSearch` class accepts `backend="bvh"` (the
-default), `"bruteforce"`, or `"auto"`. Extensions are always compiled during
-installation; importing torchpcl never invokes a compiler.
+Set `TORCHPCL_CUDA_ARCH_LIST` to override local GPU architecture detection or
+`TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout. Importing torchpcl never
+compiles code at runtime.
 
+## Point Clouds
 
-## Usage
+An `(N, 3)` tensor is accepted for ordinary single-cloud operations. Ragged
+batches use packed points plus offsets:
 
 ```python
 import torch
 import torchpcl as tp
 
-source = torch.randn(10_000, 3, device="cuda")   # (N, 3); CPU works too
-target = ...                                     # (M, 3), same device
-
-# Point-to-point (default)
-result = tp.icp(source, target, max_distance=0.1)
-
-# Point-to-plane (requires target normals)
-result = tp.icp(
-    source, target, 0.1,
-    method="point_to_plane",
-    target_normals=normals,                      # (M, 3)
-    max_iterations=50,
-)
-
-result.transforms       # (B, 4, 4) source-to-target transforms
-result.fitness          # (B,) inliers / source length
-result.inlier_rmse      # (B,)
-result.converged        # (B,)
-result.iterations       # (B,)
-
-# Coarse-to-fine ICP for larger initial misalignment
-result = tp.multiscale_icp(
-    source,
-    target,
-    scales=[
-        tp.ICPScale(voxel_size=0.20, max_distance=0.40, iterations=30),
-        tp.ICPScale(voxel_size=0.10, max_distance=0.20, iterations=20),
-        tp.ICPScale(voxel_size=0.05, max_distance=0.10, iterations=15),
-    ],
-    method="point_to_plane",
-)
-
-# Evaluate a given transformation without iterating
-tp.evaluate_registration(source, target, 0.1, transforms)
-
-# Preprocessing
-down = tp.voxel_downsample(target, voxel_size=0.05)  # per-voxel means
-normals = tp.estimate_normals(down, k=30).normals     # unbounded k-NN + PCA
-normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...).normals
-
-# Cloud comparison (accuracy/completion from prediction->reference /
-# reference->prediction; chamfer = mean of accuracy and completion)
-m = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
-m.accuracy, m.completion, m.chamfer_distance, m.precision, m.recall, m.f1_score
-
-# Differentiable chamfer loss for training (squared L2 by default;
-# squared=False matches chamfer_distance above). Also accepts padded
-# (B, N, 3) batches with per-cloud lengths.
-loss = tp.chamfer_loss(prediction, reference)  # 0-dim; grads flow to both clouds
-loss.backward()
-```
-
-Metrics are tensors on the input device. Use `.item()` only when a Python scalar
-is explicitly needed.
-
-### Packed batches
-
-Ragged batches use packed points and offsets. Indices returned by search refer
-to global rows in the packed reference tensor.
-
-```python
+cloud_a = torch.randn(2_000, 3, device="cuda")
+cloud_b = torch.randn(3_500, 3, device="cuda")
 points = torch.cat([cloud_a, cloud_b])
 cloud = tp.PointCloud(
     points,
-    torch.tensor([0, len(cloud_a), len(cloud_a) + len(cloud_b)], device=points.device),
+    torch.tensor([0, len(cloud_a), len(points)], device=points.device),
 )
-
-index = tp.NeighborIndex(cloud)
-neighbors = index.knn(cloud, k=8)
-
-voxels = tp.voxelize(cloud, voxel_size=0.05)
-normals = tp.estimate_normals(voxels.cloud, k=30)
-per_cloud = tp.chamfer_distance(cloud, reference, reduction="none")
 ```
 
-Padded batches can be converted explicitly with
-`PointCloud.from_padded(points, lengths)` and `cloud.to_padded()`.
-Pyramids can be reused across registrations with `build_pyramid`; pass the
-resulting `PointCloudPyramid` objects directly to `multiscale_icp`.
+Offsets delimit contiguous clouds and returned neighbor indices refer to global
+rows in the packed point tensor. Padded data must be converted explicitly:
 
-The packed API and ICP support float32 and float64 geometry and keep results in
-the input dtype.
-ICP correspondences remain internal and are not returned. When a batch entry
-cannot be solved, torchpcl keeps its last valid transform and returns
-`converged=False` for that entry.
+```python
+cloud = tp.PointCloud.from_padded(padded_points, lengths)
+padded_points, lengths = cloud.to_padded()
+```
+
+## Geometry
+
+Voxelization returns centroids and the reusable point-to-voxel mapping:
+
+```python
+partition = tp.voxelize(points, voxel_size=0.05)
+downsampled = partition.cloud
+voxel_features = partition.reduce(features, reduction="mean")
+
+normal_result = tp.estimate_normals(
+    downsampled,
+    radius=0.15,
+    k=30,
+    viewpoint=torch.tensor([0.0, 0.0, 0.0], device=points.device),
+)
+normals = normal_result.normals
+valid_normals = normal_result.valid
+```
+
+## Neighbor Search
+
+Reuse `NeighborIndex` when querying the same reference cloud repeatedly:
+
+```python
+index = tp.NeighborIndex(reference, algorithm="auto")
+nearest = index.knn(queries, k=8)
+local = index.hybrid(queries, radius=0.1, k=32)
+
+nearest.indices       # (Q, K), global packed indices; -1 means invalid
+nearest.distances2    # squared distances in the input dtype
+nearest.valid         # explicit validity mask
+```
+
+`tp.knn`, `tp.radius_neighbors`, and `tp.hybrid_neighbors` provide equivalent
+one-shot calls.
+
+## Metrics
+
+Metrics operate on tensors or packed clouds and return tensors on the input
+device:
+
+```python
+per_cloud = tp.chamfer_distance(
+    prediction,
+    reference,
+    squared=False,
+    reduction="none",
+)
+
+scores = tp.fscore(prediction, reference, threshold=torch.tensor([0.01, 0.05]))
+metrics = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
+```
+
+Chamfer distances are differentiable with nearest-neighbor identity treated as
+piecewise constant. Convert padded batches to `PointCloud` before computing
+metrics.
+
+## Registration
+
+Single-scale ICP accepts tensors or packed clouds. Results are always batched:
+
+```python
+result = tp.icp(
+    source,
+    target,
+    max_distance=0.1,
+    method="point_to_plane",
+    target_normals=normals,
+    max_iterations=30,
+)
+
+result.transforms      # (B, 4, 4), source-to-target
+result.converged       # (B,), bool
+result.iterations      # (B,), accumulated updates
+result.fitness         # (B,), inliers / source length
+result.inlier_rmse     # (B,)
+```
+
+Correspondences remain internal. Batch entries converge or fail independently,
+and failures retain their last valid transform.
+
+Use multi-scale ICP for larger initial misalignment:
+
+```python
+scales = [
+    tp.ICPScale(voxel_size=0.20, max_distance=0.40, iterations=30),
+    tp.ICPScale(voxel_size=0.10, max_distance=0.20, iterations=20),
+    tp.ICPScale(voxel_size=0.05, max_distance=0.10, iterations=15),
+]
+result = tp.multiscale_icp(source, target, scales, method="point_to_plane")
+```
+
+Reuse preprocessing by passing `PointCloudPyramid` objects directly:
+
+```python
+sizes = [scale.voxel_size for scale in scales]
+source_pyramid = tp.build_pyramid(source, sizes)
+target_pyramid = tp.build_pyramid(target, sizes, normal_mode="estimate")
+result = tp.multiscale_icp(source_pyramid, target_pyramid, scales,
+                           method="point_to_plane")
+```
+
+`evaluate_registration` evaluates supplied transforms without iteration and
+returns `RegistrationMetrics`.
+
+## Behavior
+
+- Geometry supports float32 and float64 on CPU and CUDA.
+- Paired inputs must have identical dtype, device, and batch size.
+- Search indices are discrete; gathered distances and Chamfer metrics support
+  autograd. Normals and registration are inference-only.
+- CPU and CUDA may choose different indices for exact distance ties.
+- Empty batch entries are supported by storage, transforms, voxelization, and
+  search queries. Metrics and registration reject empty cloud pairs.
+- Packed batches currently use exact brute-force search; BVH indexing currently
+  supports a single reference cloud.
 
 ## Development
 
 ```bash
-uv sync --group dev   # builds the extensions (no build isolation for torchpcl)
-uv run pytest -q      # CUDA tests skip automatically on machines without a GPU
+uv sync --group dev
+uv run pytest -q
 ```
 
-After touching `src/torchpcl/csrc` (or the cuBQL headers), rebuild the extensions with `uv sync --reinstall-package torchpcl`.
-If a fresh clone fails to build because torch is not installed yet, run `uv sync --no-install-project` once first.
-
-### Benchmark
-
-`benchmarks/run_benchmark.py` registers the sample scans in `data/` (source/target + ground-truth `T_target_source.txt`) and reports pose error and wall time.
-It also benchmarks voxel downsampling, normal estimation, chamfer loss, and
-BVH versus tiled brute-force k-NN construction and query time.
-Install the benchmark group to compare to small_gicp and open3d.
-Open3D is installed by the benchmark group only on Python 3.12, where its wheels are available; on newer Python versions those rows are skipped.
+CUDA tests are collected when `torch.cuda.is_available()` and the CUDA search
+extensions are installed. After changing native sources, rebuild with:
 
 ```bash
-uv run python benchmarks/run_benchmark.py [--task all] [--voxel 0.25] [--repeats 5]
+uv sync --reinstall-package torchpcl
+```
+
+## Benchmarks
+
+```bash
+uv run python benchmarks/run_benchmark.py --task all --repeats 5
+uv run python benchmarks/run_benchmark.py --task multiscale --repeats 5
 uv run python benchmarks/run_benchmark.py --task knn --knn-sizes 512 2048 8192
-uv run --group benchmark python benchmarks/run_benchmark.py
 ```
 
-Registration inputs are voxel-downsampled and normals are estimated outside the timed registration loop for each library.
-Each timed registration run includes the library's own search-structure build and the full registration from identity.
+The multi-scale benchmark is end-to-end: it includes voxel pyramids, automatic
+point-to-plane normals, neighbor indices, and all ICP levels. Configure its
+schedule with `--multiscale-voxels`, `--multiscale-distances`, and
+`--multiscale-iterations`; all three lists must have the same length.
 
-### Cross-check against Open3D
-
-`tests/test_open3d_crosscheck.py` compares results against `open3d.pipelines.registration.registration_icp` on identical inputs and skips when open3d is not importable.
-To include it:
-
-```bash
-uv sync --group dev --group benchmark
-uv run pytest -q tests/test_open3d_crosscheck.py
-```
+Install the `benchmark` dependency group to add small_gicp and Open3D rows where
+their Python packages are available. Recorded baseline results are in
+[benchmarks/BASELINE.md](benchmarks/BASELINE.md).

@@ -42,6 +42,26 @@ def test_packed_knn_is_batch_isolated_and_uses_global_indices():
     )
 
 
+def test_packed_one_shot_radius_and_hybrid():
+    reference = tp.PointCloud(
+        torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [10.0, 0.0, 0.0]]
+        ),
+        torch.tensor([0, 2, 3]),
+    )
+    queries = tp.PointCloud(
+        torch.tensor([[0.1, 0.0, 0.0], [10.2, 0.0, 0.0]]),
+        torch.tensor([0, 1, 2]),
+    )
+
+    radius = tp.radius_neighbors(reference, queries, 0.5, max_neighbors=2)
+    hybrid = tp.hybrid_neighbors(reference, queries, 0.5, 2)
+
+    assert radius.indices.tolist() == [[0, -1], [2, -1]]
+    assert torch.equal(radius.indices, hybrid.indices)
+    assert torch.equal(radius.valid, hybrid.valid)
+
+
 def test_hybrid_has_explicit_invalid_slots(search_device):
     reference = torch.zeros(1, 3, dtype=torch.float64, device=search_device)
     queries = torch.tensor(

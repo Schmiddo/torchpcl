@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from torchpcl import point_cloud_metrics
+from torchpcl import fscore, point_cloud_metrics
 
 from conftest import random_cloud
 
@@ -35,6 +35,16 @@ def test_known_shift(search_device):
 
     tight = point_cloud_metrics(prediction, grid, threshold=0.05)
     assert tight.precision == 0.0 and tight.recall == 0.0 and tight.f1_score == 0.0
+
+
+def test_unbatched_fscore_returns_device_scalars(search_device):
+    points = random_cloud(100, search_device, seed=5)
+
+    scores = fscore(points, points, threshold=0.01)
+
+    assert scores.precision.shape == ()
+    assert scores.precision.device == points.device
+    torch.testing.assert_close(scores.f1_score, torch.ones_like(scores.f1_score))
 
 
 def test_partial_prediction(search_device):

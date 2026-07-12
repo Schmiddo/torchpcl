@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from torchpcl import estimate_normals, voxel_downsample
+from torchpcl import estimate_normals, voxelize
 
 from conftest import random_cloud
 
@@ -71,7 +71,7 @@ def test_normals_input_validation(search_device):
         estimate_normals(points, radius=0.1, k=2)
 
 
-def test_voxel_downsample_means(device):
+def test_voxelize_means(device):
     # Two clusters in distinct voxels: result must be the cluster means.
     points = torch.tensor(
         [
@@ -83,7 +83,7 @@ def test_voxel_downsample_means(device):
         dtype=torch.float64,
         device=device,
     )
-    down = voxel_downsample(points, voxel_size=1.0)
+    down = voxelize(points, voxel_size=1.0).cloud.points
     assert down.shape == (2, 3)
     expected = torch.stack([points[:2].mean(dim=0), points[2:].mean(dim=0)])
     # Output voxel order is arbitrary; sort both by x.
@@ -92,19 +92,19 @@ def test_voxel_downsample_means(device):
     assert torch.allclose(down, expected)
 
 
-def test_voxel_downsample_negative_coords(device):
+def test_voxelize_negative_coords(device):
     points = torch.tensor(
         [[-1.4, -1.4, -1.4], [-1.3, -1.3, -1.3]], dtype=torch.float64, device=device
     )
-    down = voxel_downsample(points, voxel_size=1.0)
+    down = voxelize(points, voxel_size=1.0).cloud.points
     assert down.shape == (1, 3)
     assert torch.allclose(down[0], points.mean(dim=0))
 
 
-def test_voxel_downsample_reduces_and_bounds(device):
+def test_voxelize_reduces_and_bounds(device):
     points = random_cloud(5000, device, seed=3)
     voxel = 0.1
-    down = voxel_downsample(points, voxel)
+    down = voxelize(points, voxel).cloud.points
     assert 0 < len(down) < len(points)
     # Each output point is a mean of points inside one voxel, so it stays
     # within the cloud's bounding box.
@@ -112,7 +112,7 @@ def test_voxel_downsample_reduces_and_bounds(device):
     assert (down <= points.amax(dim=0) + 1e-9).all()
 
 
-def test_voxel_downsample_validation(device):
+def test_voxelize_validation(device):
     points = random_cloud(10, device, seed=0)
     with pytest.raises(ValueError, match="voxel_size"):
-        voxel_downsample(points, 0.0)
+        voxelize(points, 0.0)

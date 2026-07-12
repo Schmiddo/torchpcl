@@ -136,13 +136,4 @@ def voxelize(
     )
 
 
-def voxel_downsample(
-    cloud: torch.Tensor | PointCloud,
-    voxel_size: float,
-) -> torch.Tensor | PointCloud:
-    """Return only voxel centroids, preserving the input container style."""
-    result = voxelize(cloud, voxel_size).cloud
-    return result.points if isinstance(cloud, torch.Tensor) else result
-
-
-__all__ = ["Voxelization", "voxel_downsample", "voxelize"]
+__all__ = ["Voxelization", "voxelize"]

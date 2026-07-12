@@ -92,7 +92,7 @@ def _batch_reduce(values: torch.Tensor, reduction: str) -> torch.Tensor:
     raise ValueError("reduction must be 'none', 'mean', or 'sum'")
 
 
-def directed_nearest_distance(
+def _directed_nearest_distance(
     source: torch.Tensor | PointCloud,
     target: torch.Tensor | PointCloud,
     *,
@@ -130,12 +130,12 @@ def chamfer_distance(
 
     directed_values = []
     if directional in {"both", "source_to_target"}:
-        values = directed_nearest_distance(
+        values = _directed_nearest_distance(
             source_cloud, target_cloud, squared=squared
         )
         directed_values.append(_point_reduce(values, source_cloud, point_reduction))
     if directional in {"both", "target_to_source"}:
-        values = directed_nearest_distance(
+        values = _directed_nearest_distance(
             target_cloud, source_cloud, squared=squared
         )
         directed_values.append(_point_reduce(values, target_cloud, point_reduction))
@@ -157,10 +157,10 @@ def fscore(
     prediction_cloud, reference_cloud, unbatched = _validate_pair(
         prediction, reference
     )
-    prediction_distances = directed_nearest_distance(
+    prediction_distances = _directed_nearest_distance(
         prediction_cloud, reference_cloud
     )
-    reference_distances = directed_nearest_distance(
+    reference_distances = _directed_nearest_distance(
         reference_cloud, prediction_cloud
     )
     return _fscore_from_distances(
@@ -226,10 +226,10 @@ def point_cloud_metrics(
     prediction_cloud, reference_cloud, unbatched = _validate_pair(
         prediction, reference
     )
-    prediction_distances = directed_nearest_distance(
+    prediction_distances = _directed_nearest_distance(
         prediction_cloud, reference_cloud
     )
-    reference_distances = directed_nearest_distance(
+    reference_distances = _directed_nearest_distance(
         reference_cloud, prediction_cloud
     )
     accuracy = _point_reduce(prediction_distances, prediction_cloud, "mean")
@@ -266,61 +266,10 @@ def point_cloud_metrics(
     )
 
 
-def chamfer_loss(
-    prediction: torch.Tensor,
-    reference: torch.Tensor,
-    *,
-    prediction_lengths: torch.Tensor | None = None,
-    reference_lengths: torch.Tensor | None = None,
-    squared: bool = True,
-    single_directional: bool = False,
-    reduction: str = "mean",
-) -> torch.Tensor:
-    """Compatibility adapter for unbatched or padded dense Chamfer inputs."""
-    if prediction.ndim != reference.ndim or prediction.ndim not in {2, 3}:
-        raise ValueError(
-            "prediction and reference must both have shape (N, 3) or (B, N, 3)"
-        )
-    if prediction.ndim == 2:
-        if prediction_lengths is not None or reference_lengths is not None:
-            raise ValueError("lengths are only valid for padded inputs")
-        source: torch.Tensor | PointCloud = prediction
-        target: torch.Tensor | PointCloud = reference
-    else:
-        if prediction.shape[0] != reference.shape[0]:
-            raise ValueError("prediction and reference must have the same batch size")
-        if prediction_lengths is None:
-            prediction_lengths = torch.full(
-                (prediction.shape[0],),
-                prediction.shape[1],
-                dtype=torch.int64,
-                device=prediction.device,
-            )
-        if reference_lengths is None:
-            reference_lengths = torch.full(
-                (reference.shape[0],),
-                reference.shape[1],
-                dtype=torch.int64,
-                device=reference.device,
-            )
-        source = PointCloud.from_padded(prediction, prediction_lengths)
-        target = PointCloud.from_padded(reference, reference_lengths)
-    directional = "source_to_target" if single_directional else "both"
-    return chamfer_distance(
-        source,
-        target,
-        squared=squared,
-        directional=directional,
-        reduction=reduction,
-    )
-
-
 __all__ = [
     "FScoreResult",
     "PointCloudMetrics",
     "chamfer_distance",
-    "chamfer_loss",
-    "directed_nearest_distance",
     "fscore",
     "point_cloud_metrics",
 ]

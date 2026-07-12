@@ -115,7 +115,7 @@ def test_build_pyramid_reduces_attached_normals(search_device):
     normals[:, 2] = 1
     cloud = tp.PointCloud.from_points(points, normals=normals)
 
-    pyramid = tp.build_pyramid(cloud, [0.2, 0.1], normals="reduce")
+    pyramid = tp.build_pyramid(cloud, [0.2, 0.1], normal_mode="reduce")
 
     assert len(pyramid.levels) == 2
     for level in pyramid.levels:

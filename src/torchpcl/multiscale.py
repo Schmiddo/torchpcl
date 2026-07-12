@@ -93,24 +93,24 @@ def build_pyramid(
     cloud: torch.Tensor | PointCloud,
     voxel_sizes: Sequence[float],
     *,
-    normals: str = "none",
+    normal_mode: str = "none",
     normal_k: int = 30,
     normal_radius_factor: float | None = 2.5,
 ) -> PointCloudPyramid:
     """Voxelize a cloud at each requested resolution.
 
-    ``normals="reduce"`` averages attached input normals per voxel and
-    renormalizes them. ``normals="estimate"`` estimates normals independently
+    ``normal_mode="reduce"`` averages attached input normals per voxel and
+    renormalizes them. ``normal_mode="estimate"`` estimates normals independently
     at every level. ``"none"`` omits normals.
     """
     packed = _as_cloud(cloud)
     sizes = tuple(float(size) for size in voxel_sizes)
     if not sizes or any(size <= 0 for size in sizes):
         raise ValueError("voxel_sizes must contain positive values")
-    if normals not in {"none", "reduce", "estimate"}:
-        raise ValueError("normals must be 'none', 'reduce', or 'estimate'")
-    if normals == "reduce" and packed.normals is None:
-        raise ValueError("normals='reduce' requires attached cloud normals")
+    if normal_mode not in {"none", "reduce", "estimate"}:
+        raise ValueError("normal_mode must be 'none', 'reduce', or 'estimate'")
+    if normal_mode == "reduce" and packed.normals is None:
+        raise ValueError("normal_mode='reduce' requires attached cloud normals")
     if normal_radius_factor is not None and normal_radius_factor <= 0:
         raise ValueError("normal_radius_factor must be positive or None")
 
@@ -119,10 +119,10 @@ def build_pyramid(
         partition = voxelize(packed, voxel_size)
         level = partition.cloud
         level_normals = None
-        if normals == "reduce":
+        if normal_mode == "reduce":
             assert packed.normals is not None
             level_normals = _normalized_reduced_normals(packed.normals, partition)
-        elif normals == "estimate":
+        elif normal_mode == "estimate":
             radius = (
                 None
                 if normal_radius_factor is None
@@ -143,7 +143,7 @@ def _resolve_pyramid(
     value: torch.Tensor | PointCloud | PointCloudPyramid,
     scales: tuple[ICPScale, ...],
     *,
-    normals: str,
+    normal_mode: str,
     normal_k: int,
     normal_radius_factor: float | None,
 ) -> PointCloudPyramid:
@@ -151,7 +151,7 @@ def _resolve_pyramid(
     if isinstance(value, PointCloudPyramid):
         if value.voxel_sizes != sizes:
             raise ValueError("pyramid voxel_sizes must match scales")
-        if normals == "estimate" and any(
+        if normal_mode == "estimate" and any(
             level.normals is None for level in value.levels
         ):
             levels = []
@@ -174,7 +174,7 @@ def _resolve_pyramid(
     return build_pyramid(
         value,
         sizes,
-        normals=normals,
+        normal_mode=normal_mode,
         normal_k=normal_k,
         normal_radius_factor=normal_radius_factor,
     )
@@ -223,7 +223,7 @@ def multiscale_icp(
     source_pyramid = _resolve_pyramid(
         source,
         scale_tuple,
-        normals="none",
+        normal_mode="none",
         normal_k=normal_k,
         normal_radius_factor=normal_radius_factor,
     )
@@ -238,7 +238,7 @@ def multiscale_icp(
     target_pyramid = _resolve_pyramid(
         target,
         scale_tuple,
-        normals=normal_mode,
+        normal_mode=normal_mode,
         normal_k=normal_k,
         normal_radius_factor=normal_radius_factor,
     )

@@ -9,7 +9,7 @@ import torch
 from .cloud import PointCloud, batch_ids
 from .neighbors import NeighborIndex
 from .transforms import transform
-from .types import ICPResult
+from .types import ICPResult, RegistrationMetrics
 
 
 @dataclass(frozen=True, eq=False)
@@ -292,7 +292,7 @@ def icp(
     robust_kernel: str | None = None,
     robust_delta: float = 1.0,
     index: NeighborIndex | None = None,
-) -> ICPResult:
+) -> RegistrationMetrics:
     """Register packed source clouds to corresponding target clouds.
 
     Each batch entry converges or fails independently. Failed entries retain
@@ -421,18 +421,11 @@ def evaluate_registration(
         max_distance,
         source_ids,
     )
-    batch_size = source_cloud.batch_size
-    return ICPResult(
+    return RegistrationMetrics(
         transforms=matrices,
-        converged=torch.zeros(
-            batch_size, dtype=torch.bool, device=source_cloud.device
-        ),
-        iterations=torch.zeros(
-            batch_size, dtype=torch.int64, device=source_cloud.device
-        ),
         fitness=evaluation.fitness,
         inlier_rmse=evaluation.rmse,
     )
 
 
-__all__ = ["ICPResult", "evaluate_registration", "icp"]
+__all__ = ["ICPResult", "RegistrationMetrics", "evaluate_registration", "icp"]

@@ -74,3 +74,15 @@ times on the same data and settings:
 The new path keeps per-batch state and solves on the input device. It reads one
 aggregate active flag per iteration to stop after all entries finish; without
 that check, a fixed 50-iteration benchmark took approximately 61-63 ms.
+
+## Multi-Scale ICP
+
+The end-to-end multi-scale benchmark includes pyramid construction, automatic
+normal estimation for point-to-plane, indices, and all registration levels.
+The CPU schedule was voxel sizes `[1.0, 0.5, 0.25]`, correspondence distances
+`[2.0, 1.0, 0.5]`, and iteration budgets `[30, 20, 15]`.
+
+| Method | Time | Rotation error | Translation error | Total iterations |
+| --- | ---: | ---: | ---: | ---: |
+| Point-to-point | 44.19 ms | 0.2261 deg | 0.0082 m | 28 |
+| Point-to-plane | 52.32 ms | 0.1896 deg | 0.0113 m | 19 |

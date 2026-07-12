@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from torchpcl import chamfer_loss, point_cloud_metrics
+from torchpcl import PointCloud, chamfer_distance, point_cloud_metrics
 
 from conftest import random_cloud
 
@@ -20,7 +20,7 @@ def test_matches_bruteforce_values_and_grads(search_device, squared):
     prediction = random_cloud(300, search_device, seed=0).requires_grad_()
     reference = (random_cloud(400, search_device, seed=1) + 0.1).requires_grad_()
 
-    loss = chamfer_loss(prediction, reference, squared=squared)
+    loss = chamfer_distance(prediction, reference, squared=squared)
     grads = torch.autograd.grad(loss, (prediction, reference))
 
     expected = bruteforce_chamfer(prediction, reference, squared)
@@ -34,7 +34,7 @@ def test_matches_bruteforce_values_and_grads(search_device, squared):
 def test_unsquared_matches_metric(search_device):
     prediction = random_cloud(500, search_device, seed=2)
     reference = random_cloud(600, search_device, seed=3)
-    loss = chamfer_loss(prediction, reference, squared=False)
+    loss = chamfer_distance(prediction, reference, squared=False)
     m = point_cloud_metrics(prediction, reference, threshold=0.05)
     torch.testing.assert_close(loss, m.chamfer_distance)
 
@@ -42,7 +42,7 @@ def test_unsquared_matches_metric(search_device):
 def test_identical_clouds_zero_loss_finite_grad(search_device):
     points = random_cloud(200, search_device, seed=4)
     prediction = points.clone().requires_grad_()
-    loss = chamfer_loss(prediction, points, squared=False)
+    loss = chamfer_distance(prediction, points, squared=False)
     assert loss.item() == 0.0
     # sqrt'(0) is infinite; the safe sqrt must keep the gradient finite.
     (grad,) = torch.autograd.grad(loss, prediction)
@@ -59,23 +59,16 @@ def test_batched_matches_per_sample(search_device):
         prediction[b, : pred_lengths[b]] = random_cloud(int(pred_lengths[b]), search_device, seed=10 + b)
         reference[b, : ref_lengths[b]] = random_cloud(int(ref_lengths[b]), search_device, seed=20 + b)
 
-    losses = chamfer_loss(
-        prediction,
-        reference,
-        prediction_lengths=pred_lengths,
-        reference_lengths=ref_lengths,
-        reduction="none",
-    )
+    prediction_cloud = PointCloud.from_padded(prediction, pred_lengths)
+    reference_cloud = PointCloud.from_padded(reference, ref_lengths)
+    losses = chamfer_distance(prediction_cloud, reference_cloud, reduction="none")
     expected = torch.stack([
-        chamfer_loss(prediction[b, : pred_lengths[b]], reference[b, : ref_lengths[b]])
+        chamfer_distance(
+            prediction[b, : pred_lengths[b]], reference[b, : ref_lengths[b]]
+        )
         for b in range(3)
     ])
     torch.testing.assert_close(losses, expected)
 
-    mean = chamfer_loss(
-        prediction,
-        reference,
-        prediction_lengths=pred_lengths,
-        reference_lengths=ref_lengths,
-    )
+    mean = chamfer_distance(prediction_cloud, reference_cloud)
     assert mean.item() == pytest.approx(expected.mean().item())

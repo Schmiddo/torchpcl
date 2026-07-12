@@ -129,11 +129,26 @@ def test_evaluate_registration_batched_result(search_device):
     result = tp.evaluate_registration(source, target, 0.05, expected)
 
     assert result.transforms.shape == (1, 4, 4)
-    assert result.iterations.tolist() == [0]
+    assert isinstance(result, tp.RegistrationMetrics)
+    assert not hasattr(result, "iterations")
     torch.testing.assert_close(result.fitness, torch.ones_like(result.fitness))
     torch.testing.assert_close(
         result.inlier_rmse, torch.zeros_like(result.inlier_rmse), atol=1e-6, rtol=0
     )
+
+
+def test_evaluate_registration_packed_batch(search_device):
+    first = random_cloud(30, search_device, seed=70)
+    second = random_cloud(20, search_device, seed=71) + 2
+    cloud = tp.PointCloud(
+        torch.cat([first, second]),
+        torch.tensor([0, len(first), len(first) + len(second)], device=search_device),
+    )
+
+    result = tp.evaluate_registration(cloud, cloud, max_distance=0.01)
+
+    assert result.transforms.shape == (2, 4, 4)
+    torch.testing.assert_close(result.fitness, torch.ones_like(result.fitness))
 
 
 def test_icp_preserves_float32(search_device):

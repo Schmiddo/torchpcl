@@ -6,6 +6,7 @@ small_gicp and open3d comparison rows.
 
 Usage:
     uv run python benchmarks/run_benchmark.py [--task all] [--voxel 0.25] [--repeats 5]
+    uv run python benchmarks/run_benchmark.py --task multiscale
     uv run python benchmarks/run_benchmark.py --task knn --knn-sizes 512 2048 8192
     uv run --group benchmark python benchmarks/run_benchmark.py
 """
@@ -23,6 +24,10 @@ import torchpcl
 from _timing import timed, torch_devices
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+
+def downsample_points(points: torch.Tensor, voxel_size: float) -> torch.Tensor:
+    return torchpcl.voxelize(points, voxel_size).cloud.points
 
 
 def read_ply_points(path: Path) -> np.ndarray:
@@ -105,8 +110,8 @@ def bench_torchpcl_registration(rows, source_np, target_np, t_gt, args, device):
     source = torch.from_numpy(source_np).to(device)
     target = torch.from_numpy(target_np).to(device)
 
-    source_down = torchpcl.voxel_downsample(source, args.voxel)
-    target_down = torchpcl.voxel_downsample(target, args.voxel)
+    source_down = downsample_points(source, args.voxel)
+    target_down = downsample_points(target, args.voxel)
     normals = torchpcl.estimate_normals(target_down, k=args.normal_k).normals
     methods = {
         "point-to-point": dict(method="point_to_point"),
@@ -176,6 +181,48 @@ def bench_small_gicp_registration(rows, t_gt, args):
         ))
 
 
+def multiscale_scales(args):
+    return [
+        torchpcl.ICPScale(voxel, distance, iterations)
+        for voxel, distance, iterations in zip(
+            args.multiscale_voxels,
+            args.multiscale_distances,
+            args.multiscale_iterations,
+        )
+    ]
+
+
+def bench_torchpcl_multiscale(rows, source_np, target_np, t_gt, args, device):
+    source = torch.from_numpy(source_np).to(device)
+    target = torch.from_numpy(target_np).to(device)
+    scales = multiscale_scales(args)
+    schedule = ", ".join(
+        f"{scale.voxel_size:g}/{scale.max_distance:g}/{scale.iterations}"
+        for scale in scales
+    )
+
+    for method in ("point_to_point", "point_to_plane"):
+        result, seconds = timed(
+            lambda method=method: torchpcl.multiscale_icp(
+                source,
+                target,
+                scales,
+                method=method,
+                normal_k=args.normal_k,
+            ),
+            args.repeats,
+            device=device,
+        )
+        rot_err, trans_err = pose_errors(result.transforms[0].cpu().numpy(), t_gt)
+        rows.append((
+            "multiscale",
+            f"torchpcl {method} end-to-end [{device.type}]",
+            seconds,
+            f"rot {rot_err:.4f} deg, trans {trans_err:.4f} m, "
+            f"iters {result.iterations[0].item()}, scales voxel/dist/iters={schedule}",
+        ))
+
+
 def bench_open3d_registration(rows, source_np, target_np, t_gt, args):
     try:
         import open3d as o3d
@@ -217,14 +264,15 @@ def bench_open3d_registration(rows, source_np, target_np, t_gt, args):
 def bench_torchpcl_preprocess(rows, target_np, args, device):
     target = torch.from_numpy(target_np).to(device)
 
-    down, seconds = timed(
-        lambda: torchpcl.voxel_downsample(target, args.voxel),
+    partition, seconds = timed(
+        lambda: torchpcl.voxelize(target, args.voxel),
         args.repeats,
         device=device,
     )
+    down = partition.cloud.points
     rows.append((
         "preprocess",
-        f"torchpcl voxel_downsample [{device.type}]",
+        f"torchpcl voxelize [{device.type}]",
         seconds,
         f"{len(target)} -> {len(down)} points",
     ))
@@ -306,8 +354,8 @@ def bench_open3d_preprocess(rows, target_np, args):
 
 
 def bench_chamfer(rows, source_np, target_np, args, device):
-    source = torchpcl.voxel_downsample(torch.from_numpy(source_np).to(device), args.voxel)
-    target = torchpcl.voxel_downsample(torch.from_numpy(target_np).to(device), args.voxel)
+    source = downsample_points(torch.from_numpy(source_np).to(device), args.voxel)
+    target = downsample_points(torch.from_numpy(target_np).to(device), args.voxel)
     # The brute-force baseline materializes an N x M distance matrix that is
     # kept alive for the backward pass, so cap the cloud sizes.
     max_points = 10_000
@@ -317,12 +365,12 @@ def bench_chamfer(rows, source_np, target_np, args, device):
 
     def run_torchpcl():
         prediction = source.detach().requires_grad_()
-        loss = torchpcl.chamfer_loss(prediction, target)
+        loss = torchpcl.chamfer_distance(prediction, target)
         loss.backward()
         return loss
 
     _, seconds = timed(run_torchpcl, args.repeats, device=device)
-    rows.append(("chamfer", f"torchpcl chamfer_loss [{device.type}]", seconds, detail))
+    rows.append(("chamfer", f"torchpcl chamfer_distance [{device.type}]", seconds, detail))
 
     def run_bruteforce():
         prediction = source.detach().requires_grad_()
@@ -337,12 +385,6 @@ def bench_chamfer(rows, source_np, target_np, args, device):
 
 def bench_knn(rows, args, device):
     """Compare index construction and steady-state queries for both backends."""
-    from torchpcl import search
-    from torchpcl.search import NearestNeighborSearch
-
-    if device.type == "cuda" and search._bruteforce_cuda is None:
-        print("brute-force CUDA extension not importable -- skipping CUDA k-NN")
-        return
     generator = torch.Generator().manual_seed(1234)
 
     for num_points in args.knn_sizes:
@@ -353,7 +395,7 @@ def bench_knn(rows, args, device):
 
         for backend in ("bvh", "bruteforce"):
             def make_search(backend=backend):
-                return NearestNeighborSearch(points, math.inf, backend=backend)
+                return torchpcl.NeighborIndex(points, algorithm=backend)
 
             search_index, build_seconds = timed(
                 make_search, args.repeats, device=device
@@ -366,7 +408,7 @@ def bench_knn(rows, args, device):
             ))
 
             _, query_seconds = timed(
-                lambda: search_index.knn_query(queries, args.knn_k),
+                lambda: search_index.knn(queries, args.knn_k),
                 args.repeats,
                 device=device,
             )
@@ -389,7 +431,7 @@ def print_rows(rows):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", choices=("all", "registration", "preprocess", "chamfer", "knn"),
+    parser.add_argument("--task", choices=("all", "registration", "multiscale", "preprocess", "chamfer", "knn"),
                         default="all")
     parser.add_argument("--voxel", type=float, default=0.25,
                         help="voxel downsampling resolution")
@@ -397,6 +439,12 @@ def main():
                         help="neighbors for normal estimation")
     parser.add_argument("--max-corr-dist", type=float, default=1.0)
     parser.add_argument("--max-iters", type=int, default=50)
+    parser.add_argument("--multiscale-voxels", type=float, nargs="+",
+                        default=[1.0, 0.5, 0.25])
+    parser.add_argument("--multiscale-distances", type=float, nargs="+",
+                        default=[2.0, 1.0, 0.5])
+    parser.add_argument("--multiscale-iterations", type=int, nargs="+",
+                        default=[30, 20, 15])
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--threads", type=int, default=os.cpu_count(),
                         help="threads for small_gicp")
@@ -412,6 +460,13 @@ def main():
         parser.error("--knn-k must be in [1, 64]")
     if args.knn_queries < 1 or any(size < 1 for size in args.knn_sizes):
         parser.error("--knn-queries and every --knn-sizes value must be positive")
+    scale_lengths = {
+        len(args.multiscale_voxels),
+        len(args.multiscale_distances),
+        len(args.multiscale_iterations),
+    }
+    if len(scale_lengths) != 1 or not args.multiscale_voxels:
+        parser.error("multi-scale option lists must have the same nonzero length")
 
     source = target = t_gt = None
     if args.task != "knn":
@@ -433,6 +488,10 @@ def main():
             bench_torchpcl_registration(rows, source, target, t_gt, args, device)
         bench_small_gicp_registration(rows, t_gt, args)
         bench_open3d_registration(rows, source, target, t_gt, args)
+
+    if args.task in {"all", "multiscale"}:
+        for device in torch_devices():
+            bench_torchpcl_multiscale(rows, source, target, t_gt, args, device)
 
     if args.task in {"all", "chamfer"}:
         for device in torch_devices():

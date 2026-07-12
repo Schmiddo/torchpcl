@@ -81,10 +81,3 @@ def test_voxelize_empty_batch_entries(device):
     result = tp.voxelize(cloud, 1.0)
 
     assert result.cloud.offsets.tolist() == [0, 0, 1, 1]
-
-
-def test_voxel_downsample_preserves_input_style():
-    points = torch.randn(5, 3)
-    assert isinstance(tp.voxel_downsample(points, 1.0), torch.Tensor)
-    cloud = tp.PointCloud.from_points(points)
-    assert isinstance(tp.voxel_downsample(cloud, 1.0), tp.PointCloud)

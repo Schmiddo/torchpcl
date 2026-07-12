@@ -5,8 +5,6 @@ from .metrics import (
     FScoreResult,
     PointCloudMetrics,
     chamfer_distance,
-    chamfer_loss,
-    directed_nearest_distance,
     fscore,
     point_cloud_metrics,
 )
@@ -20,9 +18,9 @@ from .neighbors import (
 )
 from .normals import NormalResult, estimate_normals
 from .registration import evaluate_registration, icp
-from .types import ICPResult
+from .types import ICPResult, RegistrationMetrics
 from .transforms import transform
-from .voxel import Voxelization, voxel_downsample, voxelize
+from .voxel import Voxelization, voxelize
 
 __version__ = "0.2.0.dev0"
 
@@ -36,11 +34,10 @@ __all__ = [
     "PointCloud",
     "PointCloudMetrics",
     "PointCloudPyramid",
+    "RegistrationMetrics",
     "Voxelization",
     "chamfer_distance",
-    "chamfer_loss",
     "build_pyramid",
-    "directed_nearest_distance",
     "estimate_normals",
     "evaluate_registration",
     "fscore",
@@ -51,7 +48,6 @@ __all__ = [
     "point_cloud_metrics",
     "radius_neighbors",
     "transform",
-    "voxel_downsample",
     "voxelize",
     "__version__",
 ]

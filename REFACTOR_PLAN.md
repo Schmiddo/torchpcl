@@ -457,6 +457,9 @@ cumulative iteration counts.
 Do this after the desired API is exercised end to end, so packaging work does
 not optimize interfaces that are still changing.
 
+Status: explicitly deferred. The public API cleanup does not change the current
+native extension packaging, dispatcher integration, or backend implementation.
+
 ### Tasks
 
 1. Register remaining native search kernels with `TORCH_LIBRARY` CPU and CUDA
@@ -480,6 +483,10 @@ not optimize interfaces that are still changing.
   reduction, and Chamfer. ICP compilation is optional.
 
 ## Phase 9: Documentation, Examples, and Release Gate
+
+Status: documentation, migration guidance, public-surface tests, and benchmark
+coverage implemented on 2026-07-12. The final `0.2.0` release gate remains
+pending CUDA verification and the separately deferred Phase 8 work.
 
 ### Tasks
 

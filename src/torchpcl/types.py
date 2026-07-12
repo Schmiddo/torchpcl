@@ -6,14 +6,20 @@ import torch
 
 
 @dataclass(frozen=True, eq=False)
-class ICPResult:
-    """Batched ICP output without materialized correspondences."""
+class RegistrationMetrics:
+    """Metrics for a batch of source-to-target transforms."""
 
     transforms: torch.Tensor
-    converged: torch.Tensor
-    iterations: torch.Tensor
     fitness: torch.Tensor
     inlier_rmse: torch.Tensor
 
 
-__all__ = ["ICPResult"]
+@dataclass(frozen=True, eq=False)
+class ICPResult(RegistrationMetrics):
+    """Batched ICP output without materialized correspondences."""
+
+    converged: torch.Tensor
+    iterations: torch.Tensor
+
+
+__all__ = ["ICPResult", "RegistrationMetrics"]
