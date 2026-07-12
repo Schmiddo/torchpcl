@@ -1,6 +1,6 @@
 [project]
 name = "torchpcl"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Point cloud registration (ICP) and processing built on torch and cuBQL"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -13,14 +13,14 @@ Usage:
 import argparse
 import math
 import os
-import statistics
-import time
 from pathlib import Path
 
 import numpy as np
 import torch
 
 import torchpcl
+
+from _timing import timed, torch_devices
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -94,22 +94,6 @@ def pose_errors(t_est: np.ndarray, t_gt: np.ndarray) -> tuple[float, float]:
     return math.degrees(math.acos(cos_angle)), float(np.linalg.norm(err[:3, 3]))
 
 
-def timed(fn, repeats: int, sync=None):
-    """Run fn repeats+1 times (first is warmup); return (last result, median seconds)."""
-    fn()
-    times = []
-    result = None
-    for _ in range(repeats):
-        if sync:
-            sync()
-        start = time.perf_counter()
-        result = fn()
-        if sync:
-            sync()
-        times.append(time.perf_counter() - start)
-    return result, statistics.median(times)
-
-
 def load_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     source = read_ply_points(DATA_DIR / "source.ply")
     target = read_ply_points(DATA_DIR / "target.ply")
@@ -117,21 +101,13 @@ def load_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return source, target, t_gt
 
 
-def torch_devices() -> list[torch.device]:
-    devices = [torch.device("cpu")]
-    if torch.cuda.is_available():
-        devices.append(torch.device("cuda"))
-    return devices
-
-
 def bench_torchpcl_registration(rows, source_np, target_np, t_gt, args, device):
-    sync = torch.cuda.synchronize if device.type == "cuda" else None
     source = torch.from_numpy(source_np).to(device)
     target = torch.from_numpy(target_np).to(device)
 
     source_down = torchpcl.voxel_downsample(source, args.voxel)
     target_down = torchpcl.voxel_downsample(target, args.voxel)
-    normals = torchpcl.estimate_normals(target_down, k=args.normal_k)
+    normals = torchpcl.estimate_normals(target_down, k=args.normal_k).normals
     criteria = torchpcl.ICPConvergenceCriteria(max_iteration=args.max_iters)
 
     methods = {
@@ -144,7 +120,7 @@ def bench_torchpcl_registration(rows, source_np, target_np, t_gt, args, device):
                 source_down, target_down, args.max_corr_dist, criteria=criteria, **kwargs
             ),
             args.repeats,
-            sync=sync,
+            device=device,
         )
         rot_err, trans_err = pose_errors(result.transformation.cpu().numpy(), t_gt)
         rows.append((
@@ -236,11 +212,12 @@ def bench_open3d_registration(rows, source_np, target_np, t_gt, args):
 
 
 def bench_torchpcl_preprocess(rows, target_np, args, device):
-    sync = torch.cuda.synchronize if device.type == "cuda" else None
     target = torch.from_numpy(target_np).to(device)
 
     down, seconds = timed(
-        lambda: torchpcl.voxel_downsample(target, args.voxel), args.repeats, sync=sync
+        lambda: torchpcl.voxel_downsample(target, args.voxel),
+        args.repeats,
+        device=device,
     )
     rows.append((
         "preprocess",
@@ -249,14 +226,16 @@ def bench_torchpcl_preprocess(rows, target_np, args, device):
         f"{len(target)} -> {len(down)} points",
     ))
 
-    normals, seconds = timed(
-        lambda: torchpcl.estimate_normals(down, k=args.normal_k), args.repeats, sync=sync
+    normal_result, seconds = timed(
+        lambda: torchpcl.estimate_normals(down, k=args.normal_k),
+        args.repeats,
+        device=device,
     )
     rows.append((
         "preprocess",
         f"torchpcl estimate_normals [{device.type}]",
         seconds,
-        f"{len(normals)} normals, k={args.normal_k}",
+        f"{len(normal_result.normals)} normals, k={args.normal_k}",
     ))
 
 
@@ -324,7 +303,6 @@ def bench_open3d_preprocess(rows, target_np, args):
 
 
 def bench_chamfer(rows, source_np, target_np, args, device):
-    sync = torch.cuda.synchronize if device.type == "cuda" else None
     source = torchpcl.voxel_downsample(torch.from_numpy(source_np).to(device), args.voxel)
     target = torchpcl.voxel_downsample(torch.from_numpy(target_np).to(device), args.voxel)
     # The brute-force baseline materializes an N x M distance matrix that is
@@ -340,7 +318,7 @@ def bench_chamfer(rows, source_np, target_np, args, device):
         loss.backward()
         return loss
 
-    _, seconds = timed(run_torchpcl, args.repeats, sync=sync)
+    _, seconds = timed(run_torchpcl, args.repeats, device=device)
     rows.append(("chamfer", f"torchpcl chamfer_loss [{device.type}]", seconds, detail))
 
     def run_bruteforce():
@@ -350,7 +328,7 @@ def bench_chamfer(rows, source_np, target_np, args, device):
         loss.backward()
         return loss
 
-    _, seconds = timed(run_bruteforce, args.repeats, sync=sync)
+    _, seconds = timed(run_bruteforce, args.repeats, device=device)
     rows.append(("chamfer", f"torch.cdist brute force [{device.type}]", seconds, detail))
 
 
@@ -362,7 +340,6 @@ def bench_knn(rows, args, device):
     if device.type == "cuda" and search._bruteforce_cuda is None:
         print("brute-force CUDA extension not importable -- skipping CUDA k-NN")
         return
-    sync = torch.cuda.synchronize if device.type == "cuda" else None
     generator = torch.Generator().manual_seed(1234)
 
     for num_points in args.knn_sizes:
@@ -372,11 +349,11 @@ def bench_knn(rows, args, device):
         detail = f"N={num_points}, M={num_queries}, k={args.knn_k}"
 
         for backend in ("bvh", "bruteforce"):
-            make_search = lambda backend=backend: NearestNeighborSearch(
-                points, math.inf, backend=backend
-            )
+            def make_search(backend=backend):
+                return NearestNeighborSearch(points, math.inf, backend=backend)
+
             search_index, build_seconds = timed(
-                make_search, args.repeats, sync=sync
+                make_search, args.repeats, device=device
             )
             rows.append((
                 "knn",
@@ -388,7 +365,7 @@ def bench_knn(rows, args, device):
             _, query_seconds = timed(
                 lambda: search_index.knn_query(queries, args.knn_k),
                 args.repeats,
-                sync=sync,
+                device=device,
             )
             query_rate = num_queries / query_seconds
             rows.append((

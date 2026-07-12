@@ -2,6 +2,13 @@
 
 Minimal point cloud registration and processing library built on [PyTorch](https://pytorch.org) and [cuBQL](https://github.com/NVIDIA/cuBQL), inspired by [Open3D's](https://open3d.org) ICP pipeline.
 
+## Architecture
+
+torchpcl is being refactored toward a packed, ragged-batch API shared by search,
+voxelization, normal estimation, metrics, and ICP. The target API, implementation
+phases, and completion gates are documented in [REFACTOR_PLAN.md](REFACTOR_PLAN.md).
+The current public API remains available while the initial scaffold is built.
+
 Spatial search supports cuBQL BVHs and an exact tiled brute-force k-NN backend
 on **both CPU and CUDA**.
 
@@ -54,8 +61,8 @@ tp.evaluate_registration(source, target, 0.1, transformation)
 
 # Preprocessing
 down = tp.voxel_downsample(target, voxel_size=0.05)  # per-voxel means
-normals = tp.estimate_normals(down, k=30)            # unbounded k-NN + PCA
-normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...)
+normals = tp.estimate_normals(down, k=30).normals     # unbounded k-NN + PCA
+normals = tp.estimate_normals(down, radius=0.2, k=30, viewpoint=...).normals
 
 # Cloud comparison (accuracy/completion from prediction->reference /
 # reference->prediction; chamfer = mean of accuracy and completion)
@@ -69,7 +76,34 @@ loss = tp.chamfer_loss(prediction, reference)  # 0-dim; grads flow to both cloud
 loss.backward()
 ```
 
-Points are processed in the input precision (float32 recommended); the cumulative transformation and per-iteration computations are float64.
+Metrics are tensors on the input device. Use `.item()` only when a Python scalar
+is explicitly needed.
+
+### Packed batches
+
+Ragged batches use packed points and offsets. Indices returned by search refer
+to global rows in the packed reference tensor.
+
+```python
+points = torch.cat([cloud_a, cloud_b])
+cloud = tp.PointCloud(
+    points,
+    torch.tensor([0, len(cloud_a), len(cloud_a) + len(cloud_b)], device=points.device),
+)
+
+index = tp.NeighborIndex(cloud)
+neighbors = index.knn(cloud, k=8)
+
+voxels = tp.voxelize(cloud, voxel_size=0.05)
+normals = tp.estimate_normals(voxels.cloud, k=30)
+per_cloud = tp.chamfer_distance(cloud, reference, reduction="none")
+```
+
+Padded batches can be converted explicitly with
+`PointCloud.from_padded(points, lengths)` and `cloud.to_padded()`.
+
+The packed API supports float32 and float64 geometry. Legacy ICP currently
+keeps its cumulative transformation and per-iteration computations in float64.
 The API mirrors `open3d.t.pipelines.registration.icp` semantics.
 When no correspondences are found, Open3D resets the transformation to identity; torchpcl keeps the current transformation and returns `converged=False, fitness=0`.
 

@@ -12,7 +12,7 @@ def test_normals_unbounded_default(search_device):
     xy = torch.rand((2000, 2), generator=gen, dtype=torch.float64)
     points = torch.cat([xy, torch.zeros(2000, 1, dtype=torch.float64)], dim=1).to(search_device)
 
-    normals = estimate_normals(points, k=20)
+    normals = estimate_normals(points, k=20).normals
     assert torch.allclose(
         normals[:, 2].abs(),
         torch.ones(2000, dtype=torch.float64, device=search_device),
@@ -25,7 +25,7 @@ def test_normals_on_plane(search_device):
     xy = torch.rand((2000, 2), generator=gen, dtype=torch.float64)
     points = torch.cat([xy, torch.zeros(2000, 1, dtype=torch.float64)], dim=1).to(search_device)
 
-    normals = estimate_normals(points, radius=0.1, k=20)
+    normals = estimate_normals(points, radius=0.1, k=20).normals
     assert normals.shape == points.shape
     assert torch.allclose(normals[:, 2].abs(), torch.ones(2000, dtype=torch.float64, device=search_device), atol=1e-6)
     assert torch.allclose(normals.norm(dim=1), torch.ones(2000, dtype=torch.float64, device=search_device), atol=1e-6)
@@ -36,7 +36,7 @@ def test_normals_on_sphere(search_device):
     points = torch.randn((5000, 3), generator=gen, dtype=torch.float64)
     points = (points / points.norm(dim=1, keepdim=True)).to(search_device)
 
-    normals = estimate_normals(points, radius=0.2, k=30)
+    normals = estimate_normals(points, radius=0.2, k=30).normals
     # Normals of a unit sphere are the (possibly sign-flipped) positions.
     alignment = (normals * points).sum(dim=1).abs()
     assert float(alignment.min()) > 0.98
@@ -48,7 +48,9 @@ def test_normals_viewpoint_orientation(search_device):
     points = torch.cat([xy, torch.zeros(500, 1, dtype=torch.float64)], dim=1).to(search_device)
 
     viewpoint = torch.tensor([0.5, 0.5, 10.0], dtype=torch.float64, device=search_device)
-    normals = estimate_normals(points, radius=0.1, k=20, viewpoint=viewpoint)
+    normals = estimate_normals(
+        points, radius=0.1, k=20, viewpoint=viewpoint
+    ).normals
     assert (normals[:, 2] > 0.99).all()
 
 
@@ -56,8 +58,9 @@ def test_normals_isolated_points_zero(search_device):
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]], dtype=torch.float64, device=search_device
     )
-    normals = estimate_normals(points, radius=0.1, k=5)
-    assert (normals == 0).all()
+    result = estimate_normals(points, radius=0.1, k=5)
+    assert (result.normals == 0).all()
+    assert not result.valid.any()
 
 
 def test_normals_input_validation(search_device):

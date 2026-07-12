@@ -44,6 +44,32 @@ def random_cloud(n: int, device, scale: float = 1.0, seed: int | None = None) ->
     return (torch.rand((n, 3), generator=gen, dtype=torch.float64) * scale).to(device)
 
 
+def packed_ragged_batch(
+    lengths: list[int] | tuple[int, ...],
+    device: torch.device | str,
+    *,
+    dtype: torch.dtype = torch.float64,
+    seed: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generate deterministic packed points and offsets for batch tests.
+
+    Empty batch entries are supported. Random values are generated on CPU so a
+    seed produces the same cloud on every target device.
+    """
+    if any(length < 0 for length in lengths):
+        raise ValueError("lengths must be nonnegative")
+
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    total = sum(lengths)
+    points = torch.rand((total, 3), generator=generator, dtype=dtype).to(device)
+    offsets = torch.tensor(
+        [0, *torch.tensor(lengths, dtype=torch.int64).cumsum(0).tolist()],
+        dtype=torch.int64,
+        device=device,
+    )
+    return points, offsets
+
+
 def random_rigid_transform(
     max_angle: float = 0.1, max_translation: float = 0.1, seed: int | None = None, device="cpu"
 ) -> torch.Tensor:

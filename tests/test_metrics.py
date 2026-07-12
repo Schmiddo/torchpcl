@@ -9,9 +9,10 @@ from conftest import random_cloud
 def test_identical_clouds(search_device):
     points = random_cloud(1000, search_device, seed=0)
     m = point_cloud_metrics(points, points, threshold=0.01)
-    assert m.accuracy == pytest.approx(0.0, abs=1e-7)
-    assert m.completion == pytest.approx(0.0, abs=1e-7)
-    assert m.chamfer_distance == pytest.approx(0.0, abs=1e-7)
+    zero = torch.zeros((), dtype=points.dtype, device=points.device)
+    torch.testing.assert_close(m.accuracy, zero, atol=1e-7, rtol=0)
+    torch.testing.assert_close(m.completion, zero, atol=1e-7, rtol=0)
+    torch.testing.assert_close(m.chamfer_distance, zero, atol=1e-7, rtol=0)
     assert m.precision == 1.0
     assert m.recall == 1.0
     assert m.f1_score == 1.0
@@ -26,9 +27,10 @@ def test_known_shift(search_device):
     prediction = grid + torch.tensor([shift, 0.0, 0.0], dtype=torch.float64, device=search_device)
 
     m = point_cloud_metrics(prediction, grid, threshold=0.2)
-    assert m.accuracy == pytest.approx(shift, abs=1e-7)
-    assert m.completion == pytest.approx(shift, abs=1e-7)
-    assert m.chamfer_distance == pytest.approx(shift, abs=1e-7)
+    expected = torch.tensor(shift, dtype=grid.dtype, device=grid.device)
+    torch.testing.assert_close(m.accuracy, expected, atol=1e-7, rtol=0)
+    torch.testing.assert_close(m.completion, expected, atol=1e-7, rtol=0)
+    torch.testing.assert_close(m.chamfer_distance, expected, atol=1e-7, rtol=0)
     assert m.precision == 1.0 and m.recall == 1.0 and m.f1_score == 1.0
 
     tight = point_cloud_metrics(prediction, grid, threshold=0.05)
@@ -40,7 +42,9 @@ def test_partial_prediction(search_device):
     prediction = reference[:500]
 
     m = point_cloud_metrics(prediction, reference, threshold=0.01)
-    assert m.accuracy == pytest.approx(0.0, abs=1e-7)
+    torch.testing.assert_close(
+        m.accuracy, torch.zeros_like(m.accuracy), atol=1e-7, rtol=0
+    )
     assert m.precision == 1.0
     assert m.completion > 0.0
     assert m.recall < 1.0
@@ -53,12 +57,12 @@ def test_direction_swap_symmetry(search_device):
 
     ab = point_cloud_metrics(a, b, threshold=0.05)
     ba = point_cloud_metrics(b, a, threshold=0.05)
-    assert ab.accuracy == pytest.approx(ba.completion)
-    assert ab.completion == pytest.approx(ba.accuracy)
-    assert ab.precision == pytest.approx(ba.recall)
-    assert ab.recall == pytest.approx(ba.precision)
-    assert ab.chamfer_distance == pytest.approx(ba.chamfer_distance)
-    assert ab.f1_score == pytest.approx(ba.f1_score)
+    torch.testing.assert_close(ab.accuracy, ba.completion)
+    torch.testing.assert_close(ab.completion, ba.accuracy)
+    torch.testing.assert_close(ab.precision, ba.recall)
+    torch.testing.assert_close(ab.recall, ba.precision)
+    torch.testing.assert_close(ab.chamfer_distance, ba.chamfer_distance)
+    torch.testing.assert_close(ab.f1_score, ba.f1_score)
 
 
 def test_validation(device):
