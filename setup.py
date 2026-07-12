@@ -43,15 +43,28 @@ ext_modules = [
         extra_compile_args=["-O3", "-fopenmp"],
         extra_link_args=["-fopenmp"],
     ),
+    CppExtension(
+        "torchpcl._bruteforce_cpu",
+        ["src/torchpcl/csrc/bruteforce_search_cpu.cpp"],
+        extra_compile_args=["-O3", "-fopenmp"],
+        extra_link_args=["-fopenmp"],
+    ),
 ]
 
-if (cuda_home := os.environ.get("CUDA_HOME")) is not None:
+if cuda_home := os.environ.get("CUDA_HOME"):
     include_dirs = [str(cubql_root), str(Path(cuda_home) / "include")]
     ext_modules.append(
         CUDAExtension(
             "torchpcl._cubql_cuda",
             ["src/torchpcl/csrc/cubql_search.cu"],
             include_dirs=include_dirs,
+            extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3"]},
+        )
+    )
+    ext_modules.append(
+        CUDAExtension(
+            "torchpcl._bruteforce_cuda",
+            ["src/torchpcl/csrc/bruteforce_search_cuda.cu"],
             extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3"]},
         )
     )

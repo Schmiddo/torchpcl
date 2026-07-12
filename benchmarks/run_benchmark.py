@@ -6,6 +6,7 @@ small_gicp and open3d comparison rows.
 
 Usage:
     uv run python benchmarks/run_benchmark.py [--task all] [--voxel 0.25] [--repeats 5]
+    uv run python benchmarks/run_benchmark.py --task knn --knn-sizes 512 2048 8192
     uv run --group benchmark python benchmarks/run_benchmark.py
 """
 
@@ -353,6 +354,51 @@ def bench_chamfer(rows, source_np, target_np, args, device):
     rows.append(("chamfer", f"torch.cdist brute force [{device.type}]", seconds, detail))
 
 
+def bench_knn(rows, args, device):
+    """Compare index construction and steady-state queries for both backends."""
+    from torchpcl import search
+    from torchpcl.search import NearestNeighborSearch
+
+    if device.type == "cuda" and search._bruteforce_cuda is None:
+        print("brute-force CUDA extension not importable -- skipping CUDA k-NN")
+        return
+    sync = torch.cuda.synchronize if device.type == "cuda" else None
+    generator = torch.Generator().manual_seed(1234)
+
+    for num_points in args.knn_sizes:
+        num_queries = min(args.knn_queries, num_points)
+        points = torch.rand(num_points, 3, generator=generator).to(device)
+        queries = torch.rand(num_queries, 3, generator=generator).to(device)
+        detail = f"N={num_points}, M={num_queries}, k={args.knn_k}"
+
+        for backend in ("bvh", "bruteforce"):
+            make_search = lambda backend=backend: NearestNeighborSearch(
+                points, math.inf, backend=backend
+            )
+            search_index, build_seconds = timed(
+                make_search, args.repeats, sync=sync
+            )
+            rows.append((
+                "knn",
+                f"{backend} build [{device.type}]",
+                build_seconds,
+                detail,
+            ))
+
+            _, query_seconds = timed(
+                lambda: search_index.knn_query(queries, args.knn_k),
+                args.repeats,
+                sync=sync,
+            )
+            query_rate = num_queries / query_seconds
+            rows.append((
+                "knn",
+                f"{backend} query [{device.type}]",
+                query_seconds,
+                f"{detail}, {query_rate:,.0f} queries/s",
+            ))
+
+
 def print_rows(rows):
     header = f"{'task':<13} {'method':<52} {'time':>10}  detail"
     print(header)
@@ -363,7 +409,7 @@ def print_rows(rows):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", choices=("all", "registration", "preprocess", "chamfer"),
+    parser.add_argument("--task", choices=("all", "registration", "preprocess", "chamfer", "knn"),
                         default="all")
     parser.add_argument("--voxel", type=float, default=0.25,
                         help="voxel downsampling resolution")
@@ -374,11 +420,26 @@ def main():
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--threads", type=int, default=os.cpu_count(),
                         help="threads for small_gicp")
+    parser.add_argument("--knn-sizes", type=int, nargs="+", default=[512, 2048, 8192],
+                        help="reference point counts for the k-NN benchmark")
+    parser.add_argument("--knn-queries", type=int, default=1024,
+                        help="maximum query count for each k-NN case")
+    parser.add_argument("--knn-k", type=int, default=30,
+                        help="neighbor count for the k-NN benchmark")
     args = parser.parse_args()
 
-    source, target, t_gt = load_inputs()
-    print(f"source: {len(source)} pts, target: {len(target)} pts, voxel {args.voxel}, "
-          f"normal_k {args.normal_k}, median of {args.repeats} runs\n")
+    if not 1 <= args.knn_k <= 64:
+        parser.error("--knn-k must be in [1, 64]")
+    if args.knn_queries < 1 or any(size < 1 for size in args.knn_sizes):
+        parser.error("--knn-queries and every --knn-sizes value must be positive")
+
+    source = target = t_gt = None
+    if args.task != "knn":
+        source, target, t_gt = load_inputs()
+        print(f"source: {len(source)} pts, target: {len(target)} pts, voxel {args.voxel}, "
+              f"normal_k {args.normal_k}, median of {args.repeats} runs\n")
+    else:
+        print(f"synthetic k-NN, median of {args.repeats} runs\n")
 
     rows = []
     if args.task in {"all", "preprocess"}:
@@ -396,6 +457,10 @@ def main():
     if args.task in {"all", "chamfer"}:
         for device in torch_devices():
             bench_chamfer(rows, source, target, args, device)
+
+    if args.task in {"all", "knn"}:
+        for device in torch_devices():
+            bench_knn(rows, args, device)
 
     print_rows(rows)
 

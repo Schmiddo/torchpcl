@@ -2,7 +2,8 @@
 
 Minimal point cloud registration and processing library built on [PyTorch](https://pytorch.org) and [cuBQL](https://github.com/NVIDIA/cuBQL), inspired by [Open3D's](https://open3d.org) ICP pipeline.
 
-All spatial search (ICP correspondences, k-NN for normals, metric distances) runs on a cuBQL BVH, on **both CPU and CUDA**.
+Spatial search supports cuBQL BVHs and an exact tiled brute-force k-NN backend
+on **both CPU and CUDA**.
 
 ## Installation
 
@@ -16,6 +17,10 @@ Requires a C++ compiler; for GPU acceleration a CUDA toolkit with `nvcc` matchin
 
 The CUDA build targets only the local GPU architecture; set `TORCHPCL_CUDA_ARCH_LIST` to override, or `TORCHPCL_CUBQL_DIR` to point at an external cuBQL checkout.
 CPU and CUDA may tie-break equidistant neighbors differently, so correspondence indices might differ; poses and metrics should be comparable across devices.
+
+The low-level `NearestNeighborSearch` class accepts `backend="bvh"` (the
+default), `"bruteforce"`, or `"auto"`. Extensions are always compiled during
+installation; importing torchpcl never invokes a compiler.
 
 
 ## Usage
@@ -81,12 +86,14 @@ If a fresh clone fails to build because torch is not installed yet, run `uv sync
 ### Benchmark
 
 `benchmarks/run_benchmark.py` registers the sample scans in `data/` (source/target + ground-truth `T_target_source.txt`) and reports pose error and wall time.
-It also benchmarks voxel downsampling, normal estimation, and the chamfer loss (against a `torch.cdist` brute force).
+It also benchmarks voxel downsampling, normal estimation, chamfer loss, and
+BVH versus tiled brute-force k-NN construction and query time.
 Install the benchmark group to compare to small_gicp and open3d.
 Open3D is installed by the benchmark group only on Python 3.12, where its wheels are available; on newer Python versions those rows are skipped.
 
 ```bash
 uv run python benchmarks/run_benchmark.py [--task all] [--voxel 0.25] [--repeats 5]
+uv run python benchmarks/run_benchmark.py --task knn --knn-sizes 512 2048 8192
 uv run --group benchmark python benchmarks/run_benchmark.py
 ```
 
@@ -102,4 +109,3 @@ To include it:
 uv sync --group dev --group benchmark
 uv run pytest -q tests/test_open3d_crosscheck.py
 ```
-
