@@ -430,6 +430,9 @@ avoid running searches after all batch entries have converged or failed.
 
 ## Phase 7: Add Multi-Scale ICP
 
+Status: implemented on 2026-07-12 with reusable point-cloud pyramids and
+cumulative iteration counts.
+
 ### Tasks
 
 1. Add an `ICPScale` dataclass containing voxel size, maximum correspondence

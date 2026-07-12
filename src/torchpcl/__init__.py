@@ -10,6 +10,7 @@ from .metrics import (
     fscore,
     point_cloud_metrics,
 )
+from .multiscale import ICPScale, PointCloudPyramid, build_pyramid, multiscale_icp
 from .neighbors import (
     NeighborIndex,
     Neighbors,
@@ -28,14 +29,17 @@ __version__ = "0.2.0.dev0"
 __all__ = [
     "FScoreResult",
     "ICPResult",
+    "ICPScale",
     "NeighborIndex",
     "Neighbors",
     "NormalResult",
     "PointCloud",
     "PointCloudMetrics",
+    "PointCloudPyramid",
     "Voxelization",
     "chamfer_distance",
     "chamfer_loss",
+    "build_pyramid",
     "directed_nearest_distance",
     "estimate_normals",
     "evaluate_registration",
@@ -43,6 +47,7 @@ __all__ = [
     "hybrid_neighbors",
     "icp",
     "knn",
+    "multiscale_icp",
     "point_cloud_metrics",
     "radius_neighbors",
     "transform",

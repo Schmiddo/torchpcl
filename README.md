@@ -40,7 +40,7 @@ source = torch.randn(10_000, 3, device="cuda")   # (N, 3); CPU works too
 target = ...                                     # (M, 3), same device
 
 # Point-to-point (default)
-result = tp.icp(source, target, max_correspondence_distance=0.1)
+result = tp.icp(source, target, max_distance=0.1)
 
 # Point-to-plane (requires target normals)
 result = tp.icp(
@@ -56,8 +56,20 @@ result.inlier_rmse      # (B,)
 result.converged        # (B,)
 result.iterations       # (B,)
 
+# Coarse-to-fine ICP for larger initial misalignment
+result = tp.multiscale_icp(
+    source,
+    target,
+    scales=[
+        tp.ICPScale(voxel_size=0.20, max_distance=0.40, iterations=30),
+        tp.ICPScale(voxel_size=0.10, max_distance=0.20, iterations=20),
+        tp.ICPScale(voxel_size=0.05, max_distance=0.10, iterations=15),
+    ],
+    method="point_to_plane",
+)
+
 # Evaluate a given transformation without iterating
-tp.evaluate_registration(source, target, 0.1, transformation)
+tp.evaluate_registration(source, target, 0.1, transforms)
 
 # Preprocessing
 down = tp.voxel_downsample(target, voxel_size=0.05)  # per-voxel means
@@ -101,10 +113,11 @@ per_cloud = tp.chamfer_distance(cloud, reference, reduction="none")
 
 Padded batches can be converted explicitly with
 `PointCloud.from_padded(points, lengths)` and `cloud.to_padded()`.
+Pyramids can be reused across registrations with `build_pyramid`; pass the
+resulting `PointCloudPyramid` objects directly to `multiscale_icp`.
 
-The packed API supports float32 and float64 geometry. Legacy ICP currently
-keeps its cumulative transformation and per-iteration computations in float64.
-The API mirrors `open3d.t.pipelines.registration.icp` semantics.
+The packed API and ICP support float32 and float64 geometry and keep results in
+the input dtype.
 ICP correspondences remain internal and are not returned. When a batch entry
 cannot be solved, torchpcl keeps its last valid transform and returns
 `converged=False` for that entry.
