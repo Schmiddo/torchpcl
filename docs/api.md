@@ -62,7 +62,8 @@ One-shot equivalents:
 - `radius_neighbors(reference, queries, radius, max_neighbors=64, algorithm="auto")`
 - `hybrid_neighbors(reference, queries, radius, k, algorithm="auto")`
 
-Every call returns `Neighbors(indices, distances2, valid)`.
+Every call returns `Neighbors(indices, distances2, valid)`. Rows contain the
+selected nearest candidates but have no ordering or tie-breaking guarantee.
 
 ## Metrics
 

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import torch
 
+from ._backend import BvhBackend, PackedBackend
 from .cloud import PointCloud
-from .search import BatchedNearestNeighborSearch, NearestNeighborSearch
 
 
 @dataclass(frozen=True, eq=False)
@@ -17,7 +17,8 @@ class Neighbors:
 
     Indices refer to global rows in the packed reference cloud. Invalid slots
     use index ``-1``, have an explicit false validity mask, and currently hold
-    infinite squared distance.
+    infinite squared distance. Neighbor order and distance-tie resolution are
+    intentionally unspecified.
     """
 
     indices: torch.Tensor
@@ -57,7 +58,11 @@ class NeighborIndex:
             if algorithm == "auto" and self._reference.batch_size == 1
             else "bruteforce" if algorithm == "auto" else algorithm
         )
-        self._backends: dict[float, object] = {}
+        self._backend = (
+            BvhBackend(self._reference)
+            if self._algorithm == "bvh"
+            else PackedBackend(self._reference)
+        )
 
     @property
     def reference(self) -> PointCloud:
@@ -67,20 +72,6 @@ class NeighborIndex:
     def algorithm(self) -> str:
         return self._algorithm
 
-    def _backend(self, radius: float):
-        backend = self._backends.get(radius)
-        if backend is not None:
-            return backend
-        points = self._reference.points.detach()
-        if self._algorithm == "bvh":
-            backend = NearestNeighborSearch(points, radius, backend="bvh")
-        else:
-            backend = BatchedNearestNeighborSearch(
-                points, self._reference.offsets, radius
-            )
-        self._backends[radius] = backend
-        return backend
-
     def _validate_queries(self, queries: torch.Tensor | PointCloud) -> PointCloud:
         cloud = _as_cloud(queries, "queries")
         if cloud.batch_size != self._reference.batch_size:
@@ -89,11 +80,6 @@ class NeighborIndex:
             raise ValueError("queries and reference must be on the same device")
         if cloud.dtype != self._reference.dtype:
             raise ValueError("queries and reference must have the same dtype")
-        ref_lengths = self._reference.lengths
-        query_lengths = cloud.lengths
-        invalid_empty = torch.any((ref_lengths == 0) & (query_lengths > 0))
-        if bool(invalid_empty):
-            raise ValueError("a reference batch with queries must be non-empty")
         return cloud
 
     def _search(
@@ -116,14 +102,20 @@ class NeighborIndex:
                 valid=torch.empty(shape, dtype=torch.bool, device=query_cloud.device),
             )
 
-        backend = self._backend(float(radius))
-        if self._algorithm == "bvh":
-            indices, _ = backend.knn_query(query_cloud.points.detach(), k)
-        else:
-            indices, _ = backend.knn_query(
-                query_cloud.points.detach(), query_cloud.offsets, k
-            )
+        indices, _ = self._backend.knn(query_cloud, k, float(radius))
+        indices = indices.to(torch.int64)
         backend_valid = indices >= 0
+        if self._reference.points.shape[0] == 0:
+            return Neighbors(
+                indices=indices,
+                distances2=torch.full(
+                    indices.shape,
+                    math.inf,
+                    dtype=query_cloud.dtype,
+                    device=query_cloud.device,
+                ),
+                valid=backend_valid,
+            )
         gathered = self._reference.points[indices.clamp(min=0)]
         distances2 = (query_cloud.points[:, None] - gathered).square().sum(dim=-1)
         valid = backend_valid & (distances2 <= radius * radius)

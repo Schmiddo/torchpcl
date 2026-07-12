@@ -42,9 +42,10 @@ separately.
 - ICP tracks active, converged, and failed entries independently.
 - `reduction="none"` returns one metric value per batch entry.
 
-Storage, transforms, voxelization, and empty query batches allow empty entries.
-Metrics and registration reject pairs where either corresponding cloud is
-empty because their reductions and fitness are undefined.
+Storage, transforms, voxelization, and search allow empty entries. Queries
+paired with an empty reference batch receive all-invalid neighbor rows rather
+than an exception. Metrics and registration reject pairs where either
+corresponding cloud is empty because their reductions and fitness are undefined.
 
 ## Dtypes and Devices
 

@@ -22,9 +22,9 @@ def extension_skip_reason(device_type: str) -> str | None:
     if device_type == "cuda":
         if not torch.cuda.is_available():
             return "CUDA not available"
-        from torchpcl import search
+        from torchpcl import _C
 
-        if search._cubql_cuda is None:
+        if not _C.has_cuda():
             return "torchpcl was installed without the CUDA extension"
     return None
 

@@ -457,30 +457,37 @@ cumulative iteration counts.
 Do this after the desired API is exercised end to end, so packaging work does
 not optimize interfaces that are still changing.
 
-Status: explicitly deferred. The public API cleanup does not change the current
-native extension packaging, dispatcher integration, or backend implementation.
+Status: implemented. [BACKEND_CONSOLIDATION.md](BACKEND_CONSOLIDATION.md)
+defines the delivered private backend contract. CPU builds, tests, benchmarks,
+and wheel installation have been verified. The unified CUDA sources are in
+place, but require build and runtime verification on a machine with a toolkit
+compatible with the installed PyTorch. Dispatcher integration and other deep
+Torch integration features remain explicitly deferred. Neighbor results no
+longer guarantee ordering (superseding the Phase 2 "ascending distance order"
+item), and querying an empty reference batch yields invalid neighbors instead
+of raising.
 
 ### Tasks
 
-1. Register remaining native search kernels with `TORCH_LIBRARY` CPU and CUDA
-   implementations.
-2. Add Meta/FakeTensor implementations for custom operators where feasible.
-3. Add autograd registration only for native outputs that promise gradients.
-4. Collapse extension build configuration into the smallest practical number
-   of modules. CPU-only installation must remain supported.
-5. Make optional CUDA availability discoverable through a small capability API,
-   for example `tp.backends.cuda.is_available()`.
-6. Remove dead pybind bindings, legacy classes, obsolete tests, and unused
-   third-party code only after verifying it has no remaining caller.
-7. Test wheel installation in a clean CPU environment and a CUDA environment.
+1. Freeze the small private pybind contract described in the backend proposal.
+2. Build one `torchpcl._C` module with identical CPU-only and CUDA-enabled APIs.
+3. Move device selection and native calls behind a private Python adapter.
+4. Flatten packed CPU and CUDA work over queries and remove CUDA offset copies
+   to the host.
+5. Replace the four current extension definitions with one deterministic build
+   configuration and explicit CUDA selection policy.
+6. Remove legacy bindings and backend wrapper classes after the public search
+   suite passes against `_C`.
+7. Test source and wheel installation in clean CPU and CUDA environments.
 
 ### Completion gate
 
 - A clean install imports without runtime compilation.
 - CPU-only installation has no CUDA toolkit requirement.
 - The public API does not expose backend-specific extension modules.
-- A minimal `torch.compile` smoke test works for transforms, voxel feature
-  reduction, and Chamfer. ICP compilation is optional.
+- Packed CUDA queries do not transfer offsets or batch metadata to the host.
+- Public search and downstream geometry tests pass, with only the two
+  semantic changes sanctioned in the backend proposal.
 
 ## Phase 9: Documentation, Examples, and Release Gate
 

@@ -391,34 +391,63 @@ def bench_knn(rows, args, device):
         num_queries = min(args.knn_queries, num_points)
         points = torch.rand(num_points, 3, generator=generator).to(device)
         queries = torch.rand(num_queries, 3, generator=generator).to(device)
-        detail = f"N={num_points}, M={num_queries}, k={args.knn_k}"
+        for k in args.knn_k:
+            detail = f"N={num_points}, M={num_queries}, k={k}"
 
-        for backend in ("bvh", "bruteforce"):
-            def make_search(backend=backend):
-                return torchpcl.NeighborIndex(points, algorithm=backend)
+            for backend in ("bvh", "bruteforce"):
+                def make_search(backend=backend):
+                    return torchpcl.NeighborIndex(points, algorithm=backend)
 
-            search_index, build_seconds = timed(
-                make_search, args.repeats, device=device
-            )
-            rows.append((
-                "knn",
-                f"{backend} build [{device.type}]",
-                build_seconds,
-                detail,
-            ))
+                search_index, build_seconds = timed(
+                    make_search, args.repeats, device=device
+                )
+                rows.append((
+                    "knn",
+                    f"{backend} build [{device.type}]",
+                    build_seconds,
+                    detail,
+                ))
 
-            _, query_seconds = timed(
-                lambda: search_index.knn(queries, args.knn_k),
-                args.repeats,
-                device=device,
-            )
-            query_rate = num_queries / query_seconds
-            rows.append((
-                "knn",
-                f"{backend} query [{device.type}]",
-                query_seconds,
-                f"{detail}, {query_rate:,.0f} queries/s",
-            ))
+                _, query_seconds = timed(
+                    lambda k=k: search_index.knn(queries, k),
+                    args.repeats,
+                    device=device,
+                )
+                query_rate = num_queries / query_seconds
+                rows.append((
+                    "knn",
+                    f"{backend} query [{device.type}]",
+                    query_seconds,
+                    f"{detail}, {query_rate:,.0f} queries/s",
+                ))
+
+    batch_count = args.packed_batches
+    points_per_batch = args.packed_points
+    queries_per_batch = args.packed_queries
+    point_count = batch_count * points_per_batch
+    query_count = batch_count * queries_per_batch
+    packed_points = torch.rand(point_count, 3, generator=generator).to(device)
+    packed_queries = torch.rand(query_count, 3, generator=generator).to(device)
+    point_offsets = torch.arange(
+        0, point_count + 1, points_per_batch, dtype=torch.int64, device=device
+    )
+    query_offsets = torch.arange(
+        0, query_count + 1, queries_per_batch, dtype=torch.int64, device=device
+    )
+    reference = torchpcl.PointCloud(packed_points, point_offsets)
+    queries = torchpcl.PointCloud(packed_queries, query_offsets)
+    index = torchpcl.NeighborIndex(reference, algorithm="bruteforce")
+    for k in args.knn_k:
+        _, seconds = timed(
+            lambda k=k: index.knn(queries, k), args.repeats, device=device
+        )
+        rows.append((
+            "knn",
+            f"packed brute query [{device.type}]",
+            seconds,
+            f"B={batch_count}, N/B={points_per_batch}, "
+            f"M/B={queries_per_batch}, k={k}, {query_count / seconds:,.0f} queries/s",
+        ))
 
 
 def print_rows(rows):
@@ -452,14 +481,21 @@ def main():
                         help="reference point counts for the k-NN benchmark")
     parser.add_argument("--knn-queries", type=int, default=1024,
                         help="maximum query count for each k-NN case")
-    parser.add_argument("--knn-k", type=int, default=30,
-                        help="neighbor count for the k-NN benchmark")
+    parser.add_argument("--knn-k", type=int, nargs="+", default=[1, 30],
+                        help="neighbor counts for the k-NN benchmark")
+    parser.add_argument("--packed-batches", type=int, default=32)
+    parser.add_argument("--packed-points", type=int, default=256,
+                        help="reference points per packed batch")
+    parser.add_argument("--packed-queries", type=int, default=64,
+                        help="queries per packed batch")
     args = parser.parse_args()
 
-    if not 1 <= args.knn_k <= 64:
-        parser.error("--knn-k must be in [1, 64]")
+    if any(not 1 <= k <= 64 for k in args.knn_k):
+        parser.error("every --knn-k value must be in [1, 64]")
     if args.knn_queries < 1 or any(size < 1 for size in args.knn_sizes):
         parser.error("--knn-queries and every --knn-sizes value must be positive")
+    if min(args.packed_batches, args.packed_points, args.packed_queries) < 1:
+        parser.error("packed k-NN sizes must be positive")
     scale_lengths = {
         len(args.multiscale_voxels),
         len(args.multiscale_distances),

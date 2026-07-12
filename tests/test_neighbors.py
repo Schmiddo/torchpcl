@@ -8,6 +8,10 @@ import torchpcl as tp
 from conftest import packed_ragged_batch
 
 
+def _sorted_distances(result):
+    return result.distances2.masked_fill(~result.valid, torch.inf).sort(dim=1).values
+
+
 def test_knn_tensor_matches_cdist(search_device):
     reference = torch.rand(37, 3, device=search_device)
     queries = torch.rand(11, 3, device=search_device)
@@ -19,7 +23,7 @@ def test_knn_tensor_matches_cdist(search_device):
 
     assert result.indices.shape == (11, 5)
     assert result.valid.all()
-    torch.testing.assert_close(result.distances2, expected)
+    torch.testing.assert_close(_sorted_distances(result), expected)
 
 
 def test_packed_knn_is_batch_isolated_and_uses_global_indices():
@@ -36,9 +40,9 @@ def test_packed_knn_is_batch_isolated_and_uses_global_indices():
 
     result = tp.knn(reference, queries, 2)
 
-    assert result.indices.tolist() == [[1, 0], [2, 3]]
+    assert result.indices.sort(dim=1).values.tolist() == [[0, 1], [2, 3]]
     torch.testing.assert_close(
-        result.distances2, torch.tensor([[0.01, 3.61], [0.01, 3.61]])
+        _sorted_distances(result), torch.tensor([[0.01, 3.61], [0.01, 3.61]])
     )
 
 
@@ -57,8 +61,9 @@ def test_packed_one_shot_radius_and_hybrid():
     radius = tp.radius_neighbors(reference, queries, 0.5, max_neighbors=2)
     hybrid = tp.hybrid_neighbors(reference, queries, 0.5, 2)
 
-    assert radius.indices.tolist() == [[0, -1], [2, -1]]
-    assert torch.equal(radius.indices, hybrid.indices)
+    assert radius.valid.sum(dim=1).tolist() == [1, 1]
+    assert radius.indices[radius.valid].tolist() == [0, 2]
+    assert torch.equal(radius.indices.sort(dim=1).values, hybrid.indices.sort(dim=1).values)
     assert torch.equal(radius.valid, hybrid.valid)
 
 
@@ -86,6 +91,33 @@ def test_empty_query_batches_are_supported():
     )
 
     assert result.indices.shape == result.distances2.shape == (0, 2)
+
+
+def test_empty_reference_returns_invalid_neighbors(search_device):
+    reference = torch.empty(0, 3, device=search_device)
+    queries = torch.randn(3, 3, device=search_device)
+
+    result = tp.knn(reference, queries, 2)
+
+    assert not result.valid.any()
+    assert (result.indices == -1).all()
+    assert torch.isinf(result.distances2).all()
+
+
+def test_empty_packed_reference_batch_returns_invalid_row(search_device):
+    reference = tp.PointCloud(
+        torch.tensor([[10.0, 0.0, 0.0]], device=search_device),
+        torch.tensor([0, 0, 1], device=search_device),
+    )
+    queries = tp.PointCloud(
+        torch.tensor([[0.0, 0.0, 0.0], [10.1, 0.0, 0.0]], device=search_device),
+        torch.tensor([0, 1, 2], device=search_device),
+    )
+
+    result = tp.knn(reference, queries, 1)
+
+    assert result.valid[:, 0].tolist() == [False, True]
+    assert result.indices[:, 0].tolist() == [-1, 0]
 
 
 def test_neighbor_distances_have_gradients():
@@ -120,6 +152,11 @@ def test_knn_validation():
         tp.radius_neighbors(points, points, 0.0)
     with pytest.raises(ValueError, match=r"\[1, 64\]"):
         tp.knn(points, points, 65)
+
+
+def test_unsupported_device_rejected():
+    with pytest.raises(RuntimeError, match="unsupported device"):
+        tp.NeighborIndex(torch.zeros(2, 3, device="meta"))
 
 
 def test_unbounded_distance_is_finite():

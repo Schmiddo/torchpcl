@@ -65,7 +65,11 @@ class PointCloud:
         offsets = torch.tensor(
             [0, points.shape[0]], dtype=torch.int64, device=points.device
         )
-        return cls(points, offsets, normals=normals, features=features)
+        check_point_attribute(normals, points, "normals", exact_shape=True)
+        if normals is not None and normals.dtype != points.dtype:
+            raise ValueError("normals and points must have the same dtype")
+        check_point_attribute(features, points, "features")
+        return cls._from_validated(points, offsets, normals, features)
 
     @classmethod
     def from_padded(

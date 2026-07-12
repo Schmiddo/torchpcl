@@ -17,13 +17,18 @@ pip install --no-build-isolation .
 ```
 
 A CUDA build requires `CUDA_HOME` to point to a toolkit compatible with the
-installed PyTorch. For a CPU-only build:
+installed PyTorch. The default `TORCHPCL_WITH_CUDA=auto` builds CUDA when such a
+toolkit is found and otherwise builds CPU-only with an explicit warning. To
+force a CPU-only build:
 
 ```bash
-TORCHPCL_CPU_ONLY=1 pip install --no-build-isolation .
+TORCHPCL_WITH_CUDA=0 pip install --no-build-isolation .
 ```
 
-Set `TORCHPCL_CUDA_ARCH_LIST` to override local GPU architecture detection or
+Use `TORCHPCL_WITH_CUDA=1` to require CUDA and fail installation when the
+toolkit is unavailable.
+
+Set `TORCH_CUDA_ARCH_LIST` to override local GPU architecture detection or
 `TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout. Importing torchpcl never
 compiles code at runtime.
 
@@ -85,6 +90,9 @@ nearest.indices       # (Q, K), global packed indices; -1 means invalid
 nearest.distances2    # squared distances in the input dtype
 nearest.valid         # explicit validity mask
 ```
+
+Neighbor rows have no ordering or tie-breaking guarantee. Queries paired with
+an empty reference batch receive all-invalid rows.
 
 `tp.knn`, `tp.radius_neighbors`, and `tp.hybrid_neighbors` provide equivalent
 one-shot calls.
