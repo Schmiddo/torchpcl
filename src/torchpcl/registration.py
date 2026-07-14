@@ -284,7 +284,7 @@ def icp(
     robust_kernel: str | None = None,
     robust_delta: float = 1.0,
     index: NeighborIndex | None = None,
-) -> RegistrationMetrics:
+) -> ICPResult:
     """Register packed source clouds to corresponding target clouds.
 
     Each batch entry converges or fails independently. Failed entries retain
@@ -398,7 +398,7 @@ def evaluate_registration(
     transforms: torch.Tensor | None = None,
     *,
     index: NeighborIndex | None = None,
-) -> ICPResult:
+) -> RegistrationMetrics:
     """Evaluate source-to-target transforms without performing ICP updates."""
     source_cloud, target_cloud = _prepare_inputs(source, target, max_distance)
     matrices = _initial_transforms(source_cloud, transforms)
