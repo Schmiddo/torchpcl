@@ -42,18 +42,6 @@ def test_normals_on_sphere(search_device):
     assert float(alignment.min()) > 0.98
 
 
-def test_normals_viewpoint_orientation(search_device):
-    gen = torch.Generator().manual_seed(2)
-    xy = torch.rand((500, 2), generator=gen, dtype=torch.float64)
-    points = torch.cat([xy, torch.zeros(500, 1, dtype=torch.float64)], dim=1).to(search_device)
-
-    viewpoint = torch.tensor([0.5, 0.5, 10.0], dtype=torch.float64, device=search_device)
-    normals = estimate_normals(
-        points, radius=0.1, k=20, viewpoint=viewpoint
-    ).normals
-    assert (normals[:, 2] > 0.99).all()
-
-
 def test_normals_isolated_points_zero(search_device):
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]], dtype=torch.float64, device=search_device

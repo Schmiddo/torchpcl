@@ -40,13 +40,14 @@ supports `mean`, `sum`, `min`, `max`, and `first`.
 ### `estimate_normals(...)`
 
 ```text
-estimate_normals(cloud, radius=None, *, k=30, viewpoint=None,
-                 orient="none", include_self=True,
-                 return_curvature=False, index=None) -> NormalResult
+estimate_normals(cloud, radius=None, *, k=30, index=None) -> NormalResult
 ```
 
-Invalid normals are zero and identified by `NormalResult.valid`. Orientation is
-`"none"` or `"viewpoint"`. This operation does not provide gradients.
+Returns unit normals, a validity mask, and curvature (smallest eigenvalue over
+the eigenvalue sum). If the cloud has normals attached, estimated normals are
+sign-aligned to them; otherwise signs are arbitrary. The neighborhood includes
+the query point. Invalid normals are zero and identified by
+`NormalResult.valid`. This operation does not provide gradients.
 
 ## Search
 

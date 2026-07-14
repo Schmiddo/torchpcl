@@ -67,14 +67,11 @@ partition = tp.voxelize(points, voxel_size=0.05)
 downsampled = partition.cloud
 voxel_features = partition.reduce(features, reduction="mean")
 
-normal_result = tp.estimate_normals(
-    downsampled,
-    radius=0.15,
-    k=30,
-    viewpoint=torch.tensor([0.0, 0.0, 0.0], device=points.device),
-)
-normals = normal_result.normals
-valid_normals = normal_result.valid
+normal_result = tp.estimate_normals(downsampled, radius=0.15, k=30)
+normals = normal_result.normals        # unit normals; signs match attached
+                                       # normals if present, else arbitrary
+valid_normals = normal_result.valid    # false where < 3 neighbors were found
+curvature = normal_result.curvature    # smallest eigenvalue / eigenvalue sum
 ```
 
 ## Neighbor Search
