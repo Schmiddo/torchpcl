@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .cloud import PointCloud, batch_ids
+from .cloud import PointCloud, as_cloud, batch_ids
 from .neighbors import NeighborIndex
 
 
@@ -16,14 +16,6 @@ class NormalResult:
     normals: torch.Tensor
     valid: torch.Tensor
     curvature: torch.Tensor | None = None
-
-
-def _as_cloud(value: torch.Tensor | PointCloud) -> PointCloud:
-    if isinstance(value, PointCloud):
-        return value
-    if isinstance(value, torch.Tensor):
-        return PointCloud.from_points(value)
-    raise TypeError("cloud must be a torch.Tensor or PointCloud")
 
 
 @torch.no_grad()
@@ -44,7 +36,7 @@ def estimate_normals(
     neighbors are zero and marked invalid. This operation is currently
     inference-only.
     """
-    packed = _as_cloud(cloud)
+    packed = as_cloud(cloud)
     if radius is not None and radius <= 0:
         raise ValueError("radius must be positive")
     if k < 3 or k > 64:

@@ -250,6 +250,15 @@ class PointCloud:
         )
 
 
+def as_cloud(value: torch.Tensor | PointCloud, name: str = "value") -> PointCloud:
+    """Coerce a tensor or ``PointCloud`` into a ``PointCloud``."""
+    if isinstance(value, PointCloud):
+        return value
+    if isinstance(value, torch.Tensor):
+        return PointCloud.from_points(value)
+    raise TypeError(f"{name} must be a torch.Tensor or PointCloud")
+
+
 def batch_ids(offsets: torch.Tensor, total_size: int) -> torch.Tensor:
     """Return the batch index for every row represented by ``offsets``."""
     lengths = offsets[1:] - offsets[:-1]

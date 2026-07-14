@@ -7,7 +7,7 @@ from typing import Sequence
 
 import torch
 
-from .cloud import PointCloud
+from .cloud import PointCloud, as_cloud
 from .normals import estimate_normals
 from .registration import icp
 from .types import ICPResult
@@ -69,14 +69,6 @@ class PointCloudPyramid:
         return self.levels[0].dtype
 
 
-def _as_cloud(value: torch.Tensor | PointCloud) -> PointCloud:
-    if isinstance(value, PointCloud):
-        return value
-    if isinstance(value, torch.Tensor):
-        return PointCloud.from_points(value)
-    raise TypeError("cloud must be a torch.Tensor or PointCloud")
-
-
 def _normalized_reduced_normals(
     normals: torch.Tensor,
     partition,
@@ -103,7 +95,7 @@ def build_pyramid(
     renormalizes them. ``normal_mode="estimate"`` estimates normals independently
     at every level. ``"none"`` omits normals.
     """
-    packed = _as_cloud(cloud)
+    packed = as_cloud(cloud)
     sizes = tuple(float(size) for size in voxel_sizes)
     if not sizes or any(size <= 0 for size in sizes):
         raise ValueError("voxel_sizes must contain positive values")
@@ -210,7 +202,7 @@ def multiscale_icp(
     if target_normals is not None:
         if isinstance(target, PointCloudPyramid):
             raise ValueError("target_normals cannot be combined with a target pyramid")
-        target_cloud = _as_cloud(target)
+        target_cloud = as_cloud(target)
         if target_cloud.normals is not None:
             raise ValueError("target normals were specified twice")
         target = PointCloud(
@@ -231,7 +223,7 @@ def multiscale_icp(
         if isinstance(target, PointCloudPyramid):
             normal_mode = "estimate"
         else:
-            target_cloud = _as_cloud(target)
+            target_cloud = as_cloud(target)
             normal_mode = "reduce" if target_cloud.normals is not None else "estimate"
     else:
         normal_mode = "none"

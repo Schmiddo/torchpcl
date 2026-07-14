@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .cloud import PointCloud, batch_ids
+from .cloud import PointCloud, as_cloud, batch_ids
 from .neighbors import NeighborIndex
 
 
@@ -27,21 +27,13 @@ class PointCloudMetrics:
     f1_score: torch.Tensor
 
 
-def _as_cloud(value: torch.Tensor | PointCloud, name: str) -> PointCloud:
-    if isinstance(value, PointCloud):
-        return value
-    if isinstance(value, torch.Tensor):
-        return PointCloud.from_points(value)
-    raise TypeError(f"{name} must be a torch.Tensor or PointCloud")
-
-
 def _validate_pair(
     source: torch.Tensor | PointCloud,
     target: torch.Tensor | PointCloud,
 ) -> tuple[PointCloud, PointCloud, bool]:
     unbatched = isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor)
-    source_cloud = _as_cloud(source, "source")
-    target_cloud = _as_cloud(target, "target")
+    source_cloud = as_cloud(source, "source")
+    target_cloud = as_cloud(target, "target")
     if source_cloud.batch_size != target_cloud.batch_size:
         raise ValueError("source and target must have the same batch size")
     if source_cloud.device != target_cloud.device:

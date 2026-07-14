@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import torch
 
 from ._backend import BvhBackend, PackedBackend
-from .cloud import PointCloud
+from .cloud import PointCloud, as_cloud
 
 
 @dataclass(frozen=True, eq=False)
@@ -26,14 +26,6 @@ class Neighbors:
     valid: torch.Tensor
 
 
-def _as_cloud(value: torch.Tensor | PointCloud, name: str) -> PointCloud:
-    if isinstance(value, PointCloud):
-        return value
-    if isinstance(value, torch.Tensor):
-        return PointCloud.from_points(value)
-    raise TypeError(f"{name} must be a torch.Tensor or PointCloud")
-
-
 class NeighborIndex:
     """Reusable exact neighbor index over a packed reference cloud.
 
@@ -48,7 +40,7 @@ class NeighborIndex:
         *,
         algorithm: str = "auto",
     ) -> None:
-        self._reference = _as_cloud(reference, "reference")
+        self._reference = as_cloud(reference, "reference")
         if algorithm not in {"auto", "bvh", "bruteforce"}:
             raise ValueError("algorithm must be 'auto', 'bvh', or 'bruteforce'")
         if algorithm == "bvh" and self._reference.batch_size != 1:
@@ -73,7 +65,7 @@ class NeighborIndex:
         return self._algorithm
 
     def _validate_queries(self, queries: torch.Tensor | PointCloud) -> PointCloud:
-        cloud = _as_cloud(queries, "queries")
+        cloud = as_cloud(queries, "queries")
         if cloud.batch_size != self._reference.batch_size:
             raise ValueError("queries and reference must have the same batch size")
         if cloud.device != self._reference.device:

@@ -6,15 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .cloud import PointCloud, batch_ids
-
-
-def _as_cloud(value: torch.Tensor | PointCloud) -> tuple[PointCloud, bool]:
-    if isinstance(value, PointCloud):
-        return value, False
-    if isinstance(value, torch.Tensor):
-        return PointCloud.from_points(value), True
-    raise TypeError("cloud must be a torch.Tensor or PointCloud")
+from .cloud import PointCloud, as_cloud, batch_ids
 
 
 @dataclass(frozen=True, eq=False)
@@ -79,7 +71,7 @@ def voxelize(
     voxel_size: float,
 ) -> Voxelization:
     """Group packed points by ``floor(point / voxel_size)`` and average them."""
-    packed, _ = _as_cloud(cloud)
+    packed = as_cloud(cloud)
     if voxel_size <= 0:
         raise ValueError("voxel_size must be positive")
 
