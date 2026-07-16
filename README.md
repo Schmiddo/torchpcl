@@ -106,8 +106,10 @@ nearest.distances2    # squared distances in the input dtype
 nearest.valid         # explicit validity mask
 ```
 
-Neighbor rows have no ordering or tie-breaking guarantee. Queries paired with
-an empty reference batch receive all-invalid rows.
+Valid candidates in each neighbor row are returned in nondecreasing distance
+order (nearest first). No guarantee is made about the ordering of candidates
+at equal distances. Queries paired with an empty reference batch receive
+all-invalid rows.
 
 `tp.knn`, `tp.radius_neighbors`, and `tp.hybrid_neighbors` provide equivalent
 one-shot calls.

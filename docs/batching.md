@@ -66,5 +66,7 @@ estimation, and ICP are discrete or inference-only. Chamfer gradients treat
 the selected neighbor as piecewise constant. Procrustes gradients require a
 nondegenerate correspondence set whose optimal rotation is locally unique.
 
-Exact distance ties may choose different indices across CPU, CUDA, BVH, and
-brute-force backends. Distances and aggregate metrics should remain comparable.
+Neighbor candidates are returned in nondecreasing distance order (nearest
+first). Exact distance ties have no ordering guarantee and may choose different
+indices across CPU, CUDA, BVH, and brute-force backends. Distances and aggregate
+metrics should remain comparable.
