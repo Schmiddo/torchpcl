@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from ._segments import segment_sum
 from .alignment import _procrustes_packed
 from .cloud import PointCloud, as_cloud, batch_ids
 from .neighbors import NeighborIndex
@@ -22,18 +23,6 @@ class _Evaluation:
     counts: torch.Tensor
     fitness: torch.Tensor
     rmse: torch.Tensor
-
-
-def _segment_sum(
-    values: torch.Tensor,
-    ids: torch.Tensor,
-    batch_size: int,
-) -> torch.Tensor:
-    if batch_size == 1:
-        return values.sum(dim=0, keepdim=True)
-    output = values.new_zeros((batch_size, *values.shape[1:]))
-    output.index_add_(0, ids, values)
-    return output
 
 
 def _prepare_inputs(
@@ -109,8 +98,8 @@ def _evaluate(
     valid = neighbors.valid[:, 0]
     target_points = target.points[indices.clamp(min=0)]
     distances2 = neighbors.distances2[:, 0].masked_fill(~valid, 0)
-    counts = _segment_sum(valid.to(torch.int64), source_ids, source.batch_size)
-    squared_error = _segment_sum(distances2, source_ids, source.batch_size)
+    counts = segment_sum(valid.to(torch.int64), source_ids, source.batch_size)
+    squared_error = segment_sum(distances2, source_ids, source.batch_size)
     fitness = counts.to(source.dtype) / source.lengths.to(source.dtype)
     rmse = torch.where(
         counts > 0,
@@ -207,12 +196,12 @@ def _point_to_plane_delta(
         [torch.linalg.cross(evaluation.current, matched_normals), matched_normals],
         dim=1,
     )
-    jtj = _segment_sum(
+    jtj = segment_sum(
         jacobian[:, :, None] * jacobian[:, None, :] * weights[:, None, None],
         ids,
         batch_size,
     )
-    jtr = _segment_sum(
+    jtr = segment_sum(
         jacobian * residual[:, None] * weights[:, None], ids, batch_size
     )
     pose, info = torch.linalg.solve_ex(jtj, -jtr)

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from ._segments import segment_sum
 from .cloud import PointCloud, as_cloud, batch_ids
 
 
@@ -33,18 +34,6 @@ class ProcrustesResult:
         return torch.cat([upper, bottom], dim=1)
 
 
-def _segment_sum(
-    values: torch.Tensor,
-    ids: torch.Tensor,
-    batch_size: int,
-) -> torch.Tensor:
-    if batch_size == 1:
-        return values.sum(dim=0, keepdim=True)
-    output = values.new_zeros((batch_size, *values.shape[1:]))
-    output.index_add_(0, ids, values)
-    return output
-
-
 def _procrustes_packed(
     source: torch.Tensor,
     target: torch.Tensor,
@@ -60,17 +49,17 @@ def _procrustes_packed(
     degenerate correspondence sets. Zero-weight batches are permitted here so
     inference-only registration can mask inactive entries after solving.
     """
-    weight_sum = _segment_sum(weights, ids, batch_size)
+    weight_sum = segment_sum(weights, ids, batch_size)
     safe_weight_sum = weight_sum.clamp_min(torch.finfo(weights.dtype).tiny)
-    source_mean = _segment_sum(source * weights[:, None], ids, batch_size)
+    source_mean = segment_sum(source * weights[:, None], ids, batch_size)
     source_mean = source_mean / safe_weight_sum[:, None]
-    target_mean = _segment_sum(target * weights[:, None], ids, batch_size)
+    target_mean = segment_sum(target * weights[:, None], ids, batch_size)
     target_mean = target_mean / safe_weight_sum[:, None]
 
     centered_source = source - source_mean[ids]
     centered_target = target - target_mean[ids]
     covariance = centered_source[:, :, None] * centered_target[:, None, :]
-    covariance = _segment_sum(
+    covariance = segment_sum(
         covariance * weights[:, None, None], ids, batch_size
     )
 
@@ -85,7 +74,7 @@ def _procrustes_packed(
     rotation = v @ correction @ u.transpose(1, 2)
 
     if estimate_scale:
-        source_variance = _segment_sum(
+        source_variance = segment_sum(
             weights * centered_source.square().sum(dim=1), ids, batch_size
         )
         scale = (singular_values * diagonal).sum(dim=1) / source_variance.clamp_min(
@@ -151,7 +140,7 @@ def procrustes(
         point_weights = weights
 
     ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
-    positive_counts = _segment_sum(
+    positive_counts = segment_sum(
         (point_weights > 0).to(torch.int64), ids, source_cloud.batch_size
     )
     if bool(torch.any(positive_counts < 3)):

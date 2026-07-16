@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from ._segments import segment_sum
 from .cloud import PointCloud, as_cloud, batch_ids
 from .neighbors import NeighborIndex
 
@@ -53,13 +54,6 @@ def _safe_sqrt(values: torch.Tensor) -> torch.Tensor:
     return torch.where(positive, values, torch.ones_like(values)).sqrt() * positive
 
 
-def _segment_sum(values: torch.Tensor, cloud: PointCloud) -> torch.Tensor:
-    ids = batch_ids(cloud.offsets, cloud.points.shape[0])
-    output = values.new_zeros((cloud.batch_size, *values.shape[1:]))
-    output.index_add_(0, ids, values)
-    return output
-
-
 def _point_reduce(
     values: torch.Tensor,
     cloud: PointCloud,
@@ -67,7 +61,8 @@ def _point_reduce(
 ) -> torch.Tensor:
     if reduction not in {"mean", "sum"}:
         raise ValueError("point_reduction must be 'mean' or 'sum'")
-    result = _segment_sum(values, cloud)
+    ids = batch_ids(cloud.offsets, cloud.points.shape[0])
+    result = segment_sum(values, ids, cloud.batch_size)
     if reduction == "mean":
         shape = (cloud.batch_size, *([1] * (values.ndim - 1)))
         result = result / cloud.lengths.to(values.dtype).reshape(shape)
