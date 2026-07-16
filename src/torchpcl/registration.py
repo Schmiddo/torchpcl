@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from .alignment import _procrustes_packed
 from .cloud import PointCloud, as_cloud, batch_ids
 from .neighbors import NeighborIndex
 from .transforms import transform
@@ -166,32 +167,15 @@ def _point_to_point_delta(
         robust_kernel,
         robust_delta,
     )
-    weight_sum = _segment_sum(weights, ids, batch_size).clamp_min(
-        torch.finfo(weights.dtype).tiny
+    alignment, _ = _procrustes_packed(
+        evaluation.current,
+        evaluation.target,
+        weights,
+        ids,
+        batch_size,
+        estimate_scale=False,
     )
-    source_mean = _segment_sum(
-        evaluation.current * weights[:, None], ids, batch_size
-    ) / weight_sum[:, None]
-    target_mean = _segment_sum(
-        evaluation.target * weights[:, None], ids, batch_size
-    ) / weight_sum[:, None]
-    centered_source = evaluation.current - source_mean[ids]
-    centered_target = evaluation.target - target_mean[ids]
-    covariance = centered_source[:, :, None] * centered_target[:, None, :]
-    covariance = _segment_sum(
-        covariance * weights[:, None, None], ids, batch_size
-    )
-
-    u, _, vh = torch.linalg.svd(covariance)
-    v = vh.transpose(1, 2)
-    determinant = torch.linalg.det(v @ u.transpose(1, 2))
-    correction = torch.eye(
-        3, dtype=covariance.dtype, device=covariance.device
-    ).repeat(batch_size, 1, 1)
-    correction[:, 2, 2] = determinant
-    rotation = v @ correction @ u.transpose(1, 2)
-    translation = target_mean - (rotation @ source_mean[:, :, None]).squeeze(-1)
-    delta = _rigid_matrices(rotation, translation)
+    delta = alignment.transforms
     solvable = active & (evaluation.counts >= 3) & torch.isfinite(delta).all(
         dim=(1, 2)
     )

@@ -31,6 +31,20 @@ Ordered tuple of packed clouds and matching voxel sizes. Build one with
 Applies one `(4, 4)` transform to a tensor, or `(B, 4, 4)` transforms to a
 packed cloud. Attached normals are rotated; features are shared.
 
+### `procrustes(source, target, *, weights=None, estimate_scale=False)`
+
+Differentiably aligns corresponding point rows using weighted SVD. Tensor
+inputs represent one cloud; packed inputs require equal source and target
+lengths in every batch entry. The orientation-preserving result contains
+batched `rotation`, `translation`, `scale`, and homogeneous `transforms`.
+
+The default solves rigid Procrustes/Kabsch. `estimate_scale=True` solves the
+Umeyama similarity problem and places `scale * rotation` in the upper-left of
+`transforms`. Inputs and optional `(P,)` weights support ordinary PyTorch
+autograd. Every batch needs at least three positively weighted non-collinear
+points; gradients are undefined where the optimal rotation is not locally
+unique.
+
 ### `voxelize(cloud, voxel_size)`
 
 Returns `Voxelization(cloud, coordinates, point_to_voxel, counts)`. Coordinates

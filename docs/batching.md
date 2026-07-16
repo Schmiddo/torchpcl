@@ -36,6 +36,8 @@ separately.
 
 - `transform`, `voxelize`, search, normals, metrics, and registration share the
   same offsets convention.
+- `procrustes` pairs source and target points by packed row and therefore
+  requires matching lengths in each batch entry.
 - Voxel keys include batch identity, so points from different clouds never
   share a voxel.
 - Search pairs queries and references by batch position.
@@ -58,10 +60,11 @@ with `torch.testing.assert_close` rather than NumPy-based helpers.
 
 ## Gradients
 
-Transforms, voxel reductions, and Chamfer distances use ordinary PyTorch
-autograd. Neighbor identity, voxel membership, normal estimation, and ICP are
-discrete or inference-only. Chamfer gradients treat the selected neighbor as
-piecewise constant.
+Transforms, Procrustes alignment, voxel reductions, and Chamfer distances use
+ordinary PyTorch autograd. Neighbor identity, voxel membership, normal
+estimation, and ICP are discrete or inference-only. Chamfer gradients treat
+the selected neighbor as piecewise constant. Procrustes gradients require a
+nondegenerate correspondence set whose optimal rotation is locally unique.
 
 Exact distance ties may choose different indices across CPU, CUDA, BVH, and
 brute-force backends. Distances and aggregate metrics should remain comparable.

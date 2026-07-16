@@ -73,6 +73,25 @@ valid_normals = normal_result.valid    # false where < 3 neighbors were found
 curvature = normal_result.curvature    # smallest eigenvalue / eigenvalue sum
 ```
 
+## Corresponding-Point Alignment
+
+Use differentiable Procrustes alignment when source and target rows are known
+to correspond:
+
+```python
+alignment = tp.procrustes(source, target, weights=confidence)
+transforms = alignment.transforms       # (B, 4, 4), source-to-target
+
+similarity = tp.procrustes(source, target, estimate_scale=True)
+scales = similarity.scale               # (B,)
+```
+
+Tensor inputs represent one cloud. Packed `PointCloud` inputs support ragged
+batches and require equal source and target lengths in every batch entry.
+Rotation, translation, scale, and weights participate in ordinary PyTorch
+autograd. Degenerate correspondence sets with fewer than three positively
+weighted non-collinear points are rejected.
+
 ## Neighbor Search
 
 Reuse `NeighborIndex` when querying the same reference cloud repeatedly:
@@ -166,8 +185,9 @@ returns `RegistrationMetrics`.
 
 - Geometry supports float32 and float64 on CPU and CUDA.
 - Paired inputs must have identical dtype, device, and batch size.
-- Search indices are discrete; gathered distances and Chamfer metrics support
-  autograd. Normals and registration are inference-only.
+- Procrustes alignment, transforms, voxel reductions, and gathered metric
+  distances support autograd. Search indices are discrete; normals and ICP are
+  inference-only.
 - CPU and CUDA may choose different indices for exact distance ties.
 - Empty batch entries are supported by storage, transforms, voxelization, and
   search queries. Metrics and registration reject empty cloud pairs.
