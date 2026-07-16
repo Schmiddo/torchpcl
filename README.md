@@ -1,9 +1,9 @@
 # torchpcl
 
-Tensor-first point-cloud processing for PyTorch, with exact CPU and CUDA
-neighbor search and packed ragged batching.
+Tensor-first point-cloud processing for PyTorch.
+Currently supports packed ragged batching and fast nearest-neighbor search on CPU and CUDA.
 
-The focused public API covers neighbor search, voxelization, normal estimation,
+The public API covers neighbor search, voxelization, normal estimation,
 point-cloud metrics, and single- or multi-scale ICP. See the [API reference](docs/api.md),
 [batching guide](docs/batching.md), and [migration guide](MIGRATION.md).
 
@@ -29,8 +29,7 @@ Use `TORCHPCL_WITH_CUDA=1` to require CUDA and fail installation when the
 toolkit is unavailable.
 
 Set `TORCH_CUDA_ARCH_LIST` to override local GPU architecture detection or
-`TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout. Importing torchpcl never
-compiles code at runtime.
+`TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout.
 
 ## Point Clouds
 
