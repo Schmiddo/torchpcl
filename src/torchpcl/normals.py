@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .cloud import PointCloud, as_cloud
+from .cloud import PointCloudLike, as_point_cloud
 from .neighbors import NeighborIndex
 
 
@@ -19,7 +19,7 @@ class NormalResult:
 
 @torch.no_grad()
 def estimate_normals(
-    cloud: torch.Tensor | PointCloud,
+    cloud: PointCloudLike,
     radius: float | None = None,
     *,
     k: int = 30,
@@ -33,7 +33,7 @@ def estimate_normals(
     fewer than three valid neighbors are zero and marked invalid, as is their
     curvature. This operation is currently inference-only.
     """
-    packed = as_cloud(cloud)
+    packed = as_point_cloud(cloud)
     if radius is not None and radius <= 0:
         raise ValueError("radius must be positive")
     if k < 3 or k > 64:
@@ -41,8 +41,6 @@ def estimate_normals(
 
     if index is None:
         index = NeighborIndex(packed)
-    elif index.reference.points.data_ptr() != packed.points.data_ptr():
-        raise ValueError("index must have been built for cloud")
 
     if radius is None:
         neighbors = index.knn(packed, k)

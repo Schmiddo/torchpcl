@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
+
+if TYPE_CHECKING:
+    from .cloud import PointCloud
 
 _GEOMETRY_DTYPES = (torch.float32, torch.float64)
 
@@ -67,4 +72,32 @@ def check_point_attribute(
         raise ValueError(f"{name} and points must be on the same device")
 
 
-__all__ = ["check_geometry_tensor", "check_offsets", "check_point_attribute"]
+def check_cloud_pair(
+    first: PointCloud,
+    second: PointCloud,
+    first_name: str,
+    second_name: str,
+    *,
+    equal_lengths: bool = False,
+    non_empty: bool = False,
+) -> None:
+    """Validate properties shared by paired-cloud public operations."""
+    names = f"{first_name} and {second_name}"
+    if first.batch_size != second.batch_size:
+        raise ValueError(f"{names} must have the same batch size")
+    if first.device != second.device:
+        raise ValueError(f"{names} must be on the same device")
+    if first.dtype != second.dtype:
+        raise ValueError(f"{names} must have the same dtype")
+    if equal_lengths and not bool(torch.equal(first.lengths, second.lengths)):
+        raise ValueError(f"{names} batch entries must have equal lengths")
+    if non_empty and bool(torch.any((first.lengths == 0) | (second.lengths == 0))):
+        raise ValueError(f"{names} batches must be non-empty")
+
+
+__all__ = [
+    "check_cloud_pair",
+    "check_geometry_tensor",
+    "check_offsets",
+    "check_point_attribute",
+]

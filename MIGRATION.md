@@ -25,7 +25,11 @@ wrappers are not retained.
 
 - Replace `chamfer_loss` with `chamfer_distance`.
 - Convert padded inputs explicitly with `PointCloud.from_padded`.
+- Equal-length `(B, N, 3)` tensors are accepted directly and interpreted as
+  `B` contiguous clouds.
 - Metric results are tensors on the input device rather than Python floats.
+- F-score accepts one scalar threshold per call. F-score and combined metric
+  fields always retain their `(B,)` batch dimension.
 - `point_cloud_metrics` preserves accuracy/completion direction conventions but
   returns tensor-valued fields.
 

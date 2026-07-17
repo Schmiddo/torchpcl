@@ -103,8 +103,16 @@ def test_rejects_invalid_attributes():
         tp.PointCloud(points, offsets, features=torch.randn(2, 4))
 
 
-def test_from_padded_rejects_boolean_lengths():
-    with pytest.raises(ValueError, match="integer dtype"):
-        tp.PointCloud.from_padded(
-            torch.randn(2, 3, 3), torch.tensor([True, False])
-        )
+def test_as_point_cloud_normalizes_dense_tensor_without_copy(device):
+    points = torch.randn(2, 4, 3, device=device)
+
+    cloud = tp.as_point_cloud(points)
+
+    assert cloud.offsets.tolist() == [0, 4, 8]
+    assert cloud.points.shape == (8, 3)
+    assert cloud.points.data_ptr() == points.data_ptr()
+
+
+def test_as_point_cloud_rejects_other_tensor_layouts():
+    with pytest.raises(ValueError, match="from_padded"):
+        tp.as_point_cloud(torch.randn(2, 3, 4))

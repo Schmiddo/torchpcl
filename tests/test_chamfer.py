@@ -36,7 +36,7 @@ def test_unsquared_matches_metric(search_device):
     reference = random_cloud(600, search_device, seed=3)
     loss = chamfer_distance(prediction, reference, squared=False)
     m = point_cloud_metrics(prediction, reference, threshold=0.05)
-    torch.testing.assert_close(loss, m.chamfer_distance)
+    torch.testing.assert_close(loss, m.chamfer_distance.mean())
 
 
 def test_identical_clouds_zero_loss_finite_grad(search_device):

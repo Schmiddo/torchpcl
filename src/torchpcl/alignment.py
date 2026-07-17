@@ -7,7 +7,13 @@ from dataclasses import dataclass
 import torch
 
 from ._segments import segment_sum
-from .cloud import PointCloud, as_cloud, batch_ids
+from .cloud import (
+    PointCloudLike,
+    _normalize_cloud,
+    _pack_aligned,
+    batch_ids,
+)
+from .validation import check_cloud_pair
 
 
 @dataclass(frozen=True, eq=False)
@@ -88,19 +94,20 @@ def _procrustes_packed(
 
 
 def procrustes(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
+    source: PointCloudLike,
+    target: PointCloudLike,
     *,
     weights: torch.Tensor | None = None,
     estimate_scale: bool = False,
 ) -> ProcrustesResult:
     """Align corresponding source and target points with a differentiable SVD.
 
-    Tensor inputs represent one cloud and must have shape ``(N, 3)``. Packed
+    Tensor inputs may have shape ``(N, 3)`` or ``(B, N, 3)``. Packed
     :class:`PointCloud` inputs support ragged batches; corresponding batch
     entries must have equal lengths and points correspond by packed row.
 
-    ``weights`` optionally supplies one nonnegative weight per packed point.
+    ``weights`` optionally supplies one nonnegative weight per point and must
+    match the source leading shape: ``(N,)``, ``(B, N)``, or packed ``(P,)``.
     With ``estimate_scale=False`` this solves weighted rigid Procrustes/Kabsch.
     With ``estimate_scale=True`` it solves the orientation-preserving Umeyama
     similarity problem. Results are always batched.
@@ -111,32 +118,33 @@ def procrustes(
     """
     if not isinstance(estimate_scale, bool):
         raise TypeError("estimate_scale must be a bool")
-    source_cloud = as_cloud(source, "source")
-    target_cloud = as_cloud(target, "target")
-    if source_cloud.batch_size != target_cloud.batch_size:
-        raise ValueError("source and target must have the same batch size")
-    if source_cloud.device != target_cloud.device:
-        raise ValueError("source and target must be on the same device")
-    if source_cloud.dtype != target_cloud.dtype:
-        raise ValueError("source and target must have the same dtype")
-    if not bool(torch.equal(source_cloud.lengths, target_cloud.lengths)):
-        raise ValueError("source and target batch entries must have equal lengths")
+    normalized_source = _normalize_cloud(source, "source")
+    normalized_target = _normalize_cloud(target, "target")
+    source_cloud = normalized_source.cloud
+    target_cloud = normalized_target.cloud
+    check_cloud_pair(
+        source_cloud,
+        target_cloud,
+        "source",
+        "target",
+        equal_lengths=True,
+    )
 
     if weights is None:
         point_weights = source_cloud.points.new_ones(source_cloud.points.shape[0])
     else:
-        if not isinstance(weights, torch.Tensor):
-            raise TypeError("weights must be a torch.Tensor")
-        if weights.shape != (source_cloud.points.shape[0],):
-            raise ValueError("weights must have shape (P,)")
+        point_weights = _pack_aligned(
+            weights, normalized_source, "weights", trailing_shape=()
+        )
         if (
-            weights.device != source_cloud.device
-            or weights.dtype != source_cloud.dtype
+            point_weights.device != source_cloud.device
+            or point_weights.dtype != source_cloud.dtype
         ):
             raise ValueError("weights must match the source device and dtype")
-        if bool(torch.any(~torch.isfinite(weights))) or bool(torch.any(weights < 0)):
+        if bool(torch.any(~torch.isfinite(point_weights))) or bool(
+            torch.any(point_weights < 0)
+        ):
             raise ValueError("weights must be finite and nonnegative")
-        point_weights = weights
 
     ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
     positive_counts = segment_sum(

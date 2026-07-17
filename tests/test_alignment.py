@@ -81,6 +81,19 @@ def test_procrustes_packed_ragged_batch(device):
     )
 
 
+def test_procrustes_accepts_dense_batched_weights(device):
+    source = torch.randn(2, 8, 3, dtype=torch.float64, device=device)
+    target = source.clone()
+    weights = torch.ones(2, 8, dtype=torch.float64, device=device)
+
+    result = tp.procrustes(source, target, weights=weights)
+
+    torch.testing.assert_close(
+        result.transforms,
+        torch.eye(4, dtype=torch.float64, device=device).repeat(2, 1, 1),
+    )
+
+
 def test_procrustes_gradcheck():
     generator = torch.Generator().manual_seed(140)
     source = torch.randn(9, 3, generator=generator, dtype=torch.float64)

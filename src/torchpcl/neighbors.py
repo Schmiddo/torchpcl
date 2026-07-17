@@ -8,7 +8,8 @@ from dataclasses import dataclass
 import torch
 
 from ._backend import BvhBackend, PackedBackend
-from .cloud import PointCloud, as_cloud
+from .cloud import PointCloud, PointCloudLike, as_point_cloud
+from .validation import check_cloud_pair
 
 
 @dataclass(frozen=True, eq=False)
@@ -36,11 +37,11 @@ class NeighborIndex:
 
     def __init__(
         self,
-        reference: torch.Tensor | PointCloud,
+        reference: PointCloudLike,
         *,
         algorithm: str = "auto",
     ) -> None:
-        self._reference = as_cloud(reference, "reference")
+        self._reference = as_point_cloud(reference, "reference")
         if algorithm not in {"auto", "bvh", "bruteforce"}:
             raise ValueError("algorithm must be 'auto', 'bvh', or 'bruteforce'")
         if algorithm == "bvh" and self._reference.batch_size != 1:
@@ -64,19 +65,14 @@ class NeighborIndex:
     def algorithm(self) -> str:
         return self._algorithm
 
-    def _validate_queries(self, queries: torch.Tensor | PointCloud) -> PointCloud:
-        cloud = as_cloud(queries, "queries")
-        if cloud.batch_size != self._reference.batch_size:
-            raise ValueError("queries and reference must have the same batch size")
-        if cloud.device != self._reference.device:
-            raise ValueError("queries and reference must be on the same device")
-        if cloud.dtype != self._reference.dtype:
-            raise ValueError("queries and reference must have the same dtype")
+    def _validate_queries(self, queries: PointCloudLike) -> PointCloud:
+        cloud = as_point_cloud(queries, "queries")
+        check_cloud_pair(cloud, self._reference, "queries", "reference")
         return cloud
 
     def _search(
         self,
-        queries: torch.Tensor | PointCloud,
+        queries: PointCloudLike,
         *,
         k: int,
         radius: float,
@@ -115,13 +111,13 @@ class NeighborIndex:
         distances2 = distances2.masked_fill(~valid, math.inf)
         return Neighbors(indices=indices, distances2=distances2, valid=valid)
 
-    def knn(self, queries: torch.Tensor | PointCloud, k: int) -> Neighbors:
+    def knn(self, queries: PointCloudLike, k: int) -> Neighbors:
         """Return the ``k`` nearest neighbors for every query."""
         return self._search(queries, k=k, radius=math.inf)
 
     def radius(
         self,
-        queries: torch.Tensor | PointCloud,
+        queries: PointCloudLike,
         radius: float,
         *,
         max_neighbors: int = 64,
@@ -131,7 +127,7 @@ class NeighborIndex:
 
     def hybrid(
         self,
-        queries: torch.Tensor | PointCloud,
+        queries: PointCloudLike,
         radius: float,
         k: int,
     ) -> Neighbors:
@@ -140,8 +136,8 @@ class NeighborIndex:
 
 
 def knn(
-    reference: torch.Tensor | PointCloud,
-    queries: torch.Tensor | PointCloud,
+    reference: PointCloudLike,
+    queries: PointCloudLike,
     k: int,
     *,
     algorithm: str = "auto",
@@ -150,8 +146,8 @@ def knn(
 
 
 def radius_neighbors(
-    reference: torch.Tensor | PointCloud,
-    queries: torch.Tensor | PointCloud,
+    reference: PointCloudLike,
+    queries: PointCloudLike,
     radius: float,
     *,
     max_neighbors: int = 64,
@@ -163,8 +159,8 @@ def radius_neighbors(
 
 
 def hybrid_neighbors(
-    reference: torch.Tensor | PointCloud,
-    queries: torch.Tensor | PointCloud,
+    reference: PointCloudLike,
+    queries: PointCloudLike,
     radius: float,
     k: int,
     *,

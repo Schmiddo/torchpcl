@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 
 import torch
 
@@ -250,13 +251,105 @@ class PointCloud:
         )
 
 
-def as_cloud(value: torch.Tensor | PointCloud, name: str = "value") -> PointCloud:
-    """Coerce a tensor or ``PointCloud`` into a ``PointCloud``."""
+PointCloudLike: TypeAlias = torch.Tensor | PointCloud
+
+
+@dataclass(frozen=True)
+class _NormalizedCloud:
+    cloud: PointCloud
+    leading_shape: tuple[int, ...]
+    tensor_input: bool
+
+
+def _normalize_cloud(
+    value: PointCloudLike,
+    name: str = "value",
+) -> _NormalizedCloud:
+    """Normalize a public cloud input and retain its point-leading shape."""
     if isinstance(value, PointCloud):
-        return value
-    if isinstance(value, torch.Tensor):
-        return PointCloud.from_points(value)
-    raise TypeError(f"{name} must be a torch.Tensor or PointCloud")
+        return _NormalizedCloud(value, (value.points.shape[0],), False)
+    if not isinstance(value, torch.Tensor):
+        raise TypeError(f"{name} must be a torch.Tensor or PointCloud")
+    if value.ndim == 2:
+        cloud = PointCloud.from_points(value)
+        return _NormalizedCloud(cloud, (value.shape[0],), True)
+    if value.ndim != 3 or value.shape[2] != 3:
+        raise ValueError(
+            f"{name} must have shape (N, 3) or (B, N, 3), got "
+            f"{tuple(value.shape)}; use PointCloud.from_padded() for padded batches"
+        )
+    if value.dtype not in (torch.float32, torch.float64):
+        raise ValueError(
+            f"{name} must have dtype float32 or float64, got {value.dtype}"
+        )
+
+    batch_size, points_per_batch = value.shape[:2]
+    points = value.reshape(batch_size * points_per_batch, 3)
+    offsets = torch.arange(
+        batch_size + 1, dtype=torch.int64, device=value.device
+    ) * points_per_batch
+    cloud = PointCloud._from_validated(points, offsets)
+    return _NormalizedCloud(cloud, (batch_size, points_per_batch), True)
+
+
+def as_point_cloud(value: PointCloudLike, name: str = "value") -> PointCloud:
+    """Return the canonical packed representation of a tensor or cloud.
+
+    A tensor with shape ``(N, 3)`` represents one cloud. A tensor with shape
+    ``(B, N, 3)`` represents ``B`` equal-length clouds. Variable-length padded
+    tensors must first be converted with :meth:`PointCloud.from_padded`.
+    """
+    return _normalize_cloud(value, name).cloud
+
+
+def _pack_aligned(
+    values: torch.Tensor,
+    normalized: _NormalizedCloud,
+    name: str,
+    *,
+    trailing_shape: tuple[int, ...] | None = None,
+) -> torch.Tensor:
+    """Validate and flatten values aligned to a normalized public input."""
+    return _pack_aligned_shape(
+        values,
+        normalized.leading_shape,
+        normalized.cloud.points.shape[0],
+        normalized.cloud.device,
+        name,
+        trailing_shape=trailing_shape,
+    )
+
+
+def _pack_aligned_shape(
+    values: torch.Tensor,
+    leading_shape: tuple[int, ...],
+    total_size: int,
+    device: torch.device,
+    name: str,
+    *,
+    trailing_shape: tuple[int, ...] | None = None,
+) -> torch.Tensor:
+    """Validate and flatten values with a specified point-leading shape."""
+    if not isinstance(values, torch.Tensor):
+        raise TypeError(f"{name} must be a torch.Tensor")
+    leading_ndim = len(leading_shape)
+    if (
+        values.ndim < leading_ndim
+        or tuple(values.shape[:leading_ndim]) != leading_shape
+    ):
+        raise ValueError(
+            f"{name} must have leading shape {leading_shape}, got "
+            f"{tuple(values.shape)}"
+        )
+    actual_trailing = tuple(values.shape[leading_ndim:])
+    if trailing_shape is not None and actual_trailing != trailing_shape:
+        expected = (*leading_shape, *trailing_shape)
+        raise ValueError(
+            f"{name} must have shape {expected}, got {tuple(values.shape)}"
+        )
+    if values.device != device:
+        raise ValueError(f"{name} and points must be on the same device")
+    return values.reshape(total_size, *actual_trailing)
 
 
 def batch_ids(offsets: torch.Tensor, total_size: int) -> torch.Tensor:
@@ -269,4 +362,4 @@ def batch_ids(offsets: torch.Tensor, total_size: int) -> torch.Tensor:
     )
 
 
-__all__ = ["PointCloud"]
+__all__ = ["PointCloud", "PointCloudLike", "as_point_cloud"]

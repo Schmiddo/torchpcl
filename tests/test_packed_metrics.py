@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 import torchpcl as tp
@@ -35,24 +36,28 @@ def test_packed_chamfer_returns_per_batch_values(search_device):
     )
 
 
-def test_fscore_supports_multiple_thresholds(search_device):
+def test_fscore_supports_one_threshold(search_device):
     prediction, reference = _packed_metric_clouds(search_device)
 
-    scores = tp.fscore(
-        prediction,
-        reference,
-        torch.tensor([0.05, 0.15, 0.25], device=search_device),
-    )
+    scores = tp.fscore(prediction, reference, 0.15)
 
-    assert scores.precision.shape == (2, 3)
+    assert scores.precision.shape == (2,)
     torch.testing.assert_close(
         scores.f1_score,
-        torch.tensor(
-            [[0.0, 1.0, 1.0], [0.0, 0.0, 1.0]],
-            dtype=torch.float64,
-            device=search_device,
-        ),
+        torch.tensor([1.0, 0.0], dtype=torch.float64, device=search_device),
     )
+
+    with pytest.raises(ValueError, match="scalar"):
+        tp.fscore(prediction, reference, torch.tensor([0.1, 0.2]))
+
+
+def test_dense_tensor_and_point_cloud_are_interchangeable(search_device):
+    points = torch.randn(2, 6, 3, device=search_device)
+    cloud = tp.as_point_cloud(points)
+
+    distance = tp.chamfer_distance(points, cloud, reduction="none")
+
+    torch.testing.assert_close(distance, torch.zeros_like(distance))
 
 
 def test_packed_chamfer_gradients_match_dense_pairs(search_device):

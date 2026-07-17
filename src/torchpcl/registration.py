@@ -8,10 +8,18 @@ import torch
 
 from ._segments import segment_sum
 from .alignment import _procrustes_packed
-from .cloud import PointCloud, as_cloud, batch_ids
+from .cloud import (
+    PointCloud,
+    PointCloudLike,
+    _NormalizedCloud,
+    _normalize_cloud,
+    _pack_aligned,
+    batch_ids,
+)
 from .neighbors import NeighborIndex
 from .transforms import transform
 from .types import ICPResult, RegistrationMetrics
+from .validation import check_cloud_pair
 
 
 @dataclass(frozen=True, eq=False)
@@ -26,24 +34,14 @@ class _Evaluation:
 
 
 def _prepare_inputs(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
+    source: PointCloud,
+    target: PointCloud,
     max_distance: float,
 ) -> tuple[PointCloud, PointCloud]:
-    source_cloud = as_cloud(source, "source")
-    target_cloud = as_cloud(target, "target")
-    if source_cloud.batch_size != target_cloud.batch_size:
-        raise ValueError("source and target must have the same batch size")
-    if source_cloud.device != target_cloud.device:
-        raise ValueError("source and target must be on the same device")
-    if source_cloud.dtype != target_cloud.dtype:
-        raise ValueError("source and target must have the same dtype")
+    check_cloud_pair(source, target, "source", "target", non_empty=True)
     if max_distance <= 0:
         raise ValueError("max_distance must be positive")
-    empty = torch.any((source_cloud.lengths == 0) | (target_cloud.lengths == 0))
-    if bool(empty):
-        raise ValueError("source and target batches must be non-empty")
-    return source_cloud, target_cloud
+    return source, target
 
 
 def _initial_transforms(
@@ -66,19 +64,29 @@ def _initial_transforms(
 
 
 def _target_normals(
-    target: PointCloud,
+    target: _NormalizedCloud,
     normals: torch.Tensor | None,
     method: str,
 ) -> torch.Tensor | None:
     if normals is None:
-        normals = target.normals
+        normals = target.cloud.normals
+    else:
+        normals = _pack_aligned(
+            normals, target, "target_normals", trailing_shape=(3,)
+        )
     if method == "point_to_plane" and normals is None:
         raise ValueError("point_to_plane requires target_normals")
     if normals is None:
         return None
-    if not isinstance(normals, torch.Tensor) or normals.shape != target.points.shape:
+    if (
+        not isinstance(normals, torch.Tensor)
+        or normals.shape != target.cloud.points.shape
+    ):
         raise ValueError("target_normals must have shape (P, 3)")
-    if normals.device != target.device or normals.dtype != target.dtype:
+    if (
+        normals.device != target.cloud.device
+        or normals.dtype != target.cloud.dtype
+    ):
         raise ValueError("target_normals must match the target device and dtype")
     return normals
 
@@ -240,8 +248,8 @@ def _poses_to_matrices(pose: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def icp(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
+    source: PointCloudLike,
+    target: PointCloudLike,
     max_distance: float,
     *,
     init: torch.Tensor | None = None,
@@ -260,7 +268,11 @@ def icp(
     their last valid transform. Correspondences are internal and are not
     returned or retained in the result.
     """
-    source_cloud, target_cloud = _prepare_inputs(source, target, max_distance)
+    normalized_source = _normalize_cloud(source, "source")
+    normalized_target = _normalize_cloud(target, "target")
+    source_cloud, target_cloud = _prepare_inputs(
+        normalized_source.cloud, normalized_target.cloud, max_distance
+    )
     if method not in {"point_to_point", "point_to_plane"}:
         raise ValueError("method must be 'point_to_point' or 'point_to_plane'")
     if not isinstance(max_iterations, int) or max_iterations < 0:
@@ -271,12 +283,10 @@ def icp(
         raise ValueError("robust_kernel must be None or 'huber'")
     if robust_delta <= 0:
         raise ValueError("robust_delta must be positive")
-    normals = _target_normals(target_cloud, target_normals, method)
+    normals = _target_normals(normalized_target, target_normals, method)
     transforms = _initial_transforms(source_cloud, init)
     if index is None:
         index = NeighborIndex(target_cloud)
-    elif index.reference.points.data_ptr() != target_cloud.points.data_ptr():
-        raise ValueError("index must have been built for target")
 
     batch_size = source_cloud.batch_size
     source_ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
@@ -359,15 +369,19 @@ def icp(
 
 @torch.no_grad()
 def evaluate_registration(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
+    source: PointCloudLike,
+    target: PointCloudLike,
     max_distance: float,
     transforms: torch.Tensor | None = None,
     *,
     index: NeighborIndex | None = None,
 ) -> RegistrationMetrics:
     """Evaluate source-to-target transforms without performing ICP updates."""
-    source_cloud, target_cloud = _prepare_inputs(source, target, max_distance)
+    source_cloud, target_cloud = _prepare_inputs(
+        _normalize_cloud(source, "source").cloud,
+        _normalize_cloud(target, "target").cloud,
+        max_distance,
+    )
     matrices = _initial_transforms(source_cloud, transforms)
     if index is None:
         index = NeighborIndex(target_cloud)

@@ -33,8 +33,8 @@ Set `TORCH_CUDA_ARCH_LIST` to override local GPU architecture detection or
 
 ## Point Clouds
 
-An `(N, 3)` tensor is accepted for ordinary single-cloud operations. Ragged
-batches use packed points plus offsets:
+An `(N, 3)` tensor represents one cloud, while a `(B, N, 3)` tensor represents
+`B` equal-length clouds. Ragged batches use packed points plus offsets:
 
 ```python
 import torch
@@ -49,8 +49,10 @@ cloud = tp.PointCloud(
 )
 ```
 
-Offsets delimit contiguous clouds and returned neighbor indices refer to global
-rows in the packed point tensor. Padded data must be converted explicitly:
+Tensor batches are flattened to packed row order without copying when their
+storage permits it. Offsets delimit contiguous clouds and returned neighbor
+indices refer to global rows in the packed point tensor. Variable-length
+padded data must be converted explicitly:
 
 ```python
 cloud = tp.PointCloud.from_padded(padded_points, lengths)
@@ -86,8 +88,9 @@ similarity = tp.procrustes(source, target, estimate_scale=True)
 scales = similarity.scale               # (B,)
 ```
 
-Tensor inputs represent one cloud. Packed `PointCloud` inputs support ragged
-batches and require equal source and target lengths in every batch entry.
+Tensor inputs represent one cloud or an equal-length batch. Packed `PointCloud`
+inputs support ragged batches and require equal source and target lengths in
+every batch entry.
 Rotation, translation, scale, and weights participate in ordinary PyTorch
 autograd. Degenerate correspondence sets with fewer than three positively
 weighted non-collinear points are rejected.
@@ -127,9 +130,13 @@ per_cloud = tp.chamfer_distance(
     reduction="none",
 )
 
-scores = tp.fscore(prediction, reference, threshold=torch.tensor([0.01, 0.05]))
+scores = tp.fscore(prediction, reference, threshold=0.01)
 metrics = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 ```
+
+F-score and combined metric fields always retain the batch dimension, including
+the implicit batch of size one created by an `(N, 3)` tensor. F-score accepts
+one scalar threshold per call.
 
 Chamfer distances are differentiable with nearest-neighbor identity treated as
 piecewise constant. Convert padded batches to `PointCloud` before computing
@@ -193,8 +200,8 @@ returns `RegistrationMetrics`.
 - CPU and CUDA may choose different indices for exact distance ties.
 - Empty batch entries are supported by storage, transforms, voxelization, and
   search queries. Metrics and registration reject empty cloud pairs.
-- Packed batches currently use exact brute-force search; BVH indexing currently
-  supports a single reference cloud.
+- Multi-cloud batches currently use exact brute-force search; BVH indexing
+  currently supports a single reference cloud.
 
 ## Development
 

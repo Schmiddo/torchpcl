@@ -121,6 +121,22 @@ def test_transform_promotes_geometry_dtype(device):
     assert moved.dtype == torch.float64
 
 
+def test_transform_restores_dense_batch_shape(device):
+    points = torch.zeros(2, 3, 3, device=device)
+    matrices = torch.eye(4, device=device).repeat(2, 1, 1)
+    matrices[:, :3, 3] = torch.tensor(
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], device=device
+    )
+
+    moved = transform(points, matrices)
+
+    assert moved.shape == points.shape
+    torch.testing.assert_close(moved[:, 0], matrices[:, :3, 3])
+
+    single = transform(points[0], matrices[:1])
+    torch.testing.assert_close(single[0], matrices[0, :3, 3])
+
+
 def test_transform_rejects_half_precision_points():
     with pytest.raises(ValueError, match="float32 or float64"):
         transform(torch.randn(3, 3, dtype=torch.float16), torch.eye(4))

@@ -1,7 +1,7 @@
 """Point cloud registration and processing built on torch and cuBQL."""
 
 from .alignment import ProcrustesResult, procrustes
-from .cloud import PointCloud
+from .cloud import PointCloud, PointCloudLike, as_point_cloud
 from .metrics import (
     FScoreResult,
     PointCloudMetrics,
@@ -33,11 +33,13 @@ __all__ = [
     "Neighbors",
     "NormalResult",
     "PointCloud",
+    "PointCloudLike",
     "PointCloudMetrics",
     "PointCloudPyramid",
     "ProcrustesResult",
     "RegistrationMetrics",
     "Voxelization",
+    "as_point_cloud",
     "chamfer_distance",
     "build_pyramid",
     "estimate_normals",

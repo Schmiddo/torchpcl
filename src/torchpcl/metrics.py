@@ -7,8 +7,9 @@ from dataclasses import dataclass
 import torch
 
 from ._segments import segment_sum
-from .cloud import PointCloud, as_cloud
+from .cloud import PointCloud, PointCloudLike, as_point_cloud
 from .neighbors import NeighborIndex
+from .validation import check_cloud_pair
 
 
 @dataclass(frozen=True, eq=False)
@@ -29,24 +30,10 @@ class PointCloudMetrics:
 
 
 def _validate_pair(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
-) -> tuple[PointCloud, PointCloud, bool]:
-    unbatched = isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor)
-    source_cloud = as_cloud(source, "source")
-    target_cloud = as_cloud(target, "target")
-    if source_cloud.batch_size != target_cloud.batch_size:
-        raise ValueError("source and target must have the same batch size")
-    if source_cloud.device != target_cloud.device:
-        raise ValueError("source and target must be on the same device")
-    if source_cloud.dtype != target_cloud.dtype:
-        raise ValueError("source and target must have the same dtype")
-    has_empty = torch.any(
-        (source_cloud.lengths == 0) | (target_cloud.lengths == 0)
-    )
-    if bool(has_empty):
-        raise ValueError("source and target batches must be non-empty")
-    return source_cloud, target_cloud, unbatched
+    source: PointCloud,
+    target: PointCloud,
+) -> None:
+    check_cloud_pair(source, target, "source", "target", non_empty=True)
 
 
 def _safe_sqrt(values: torch.Tensor) -> torch.Tensor:
@@ -79,25 +66,22 @@ def _batch_reduce(values: torch.Tensor, reduction: str) -> torch.Tensor:
 
 
 def _directed_nearest_distance(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
+    source: PointCloud,
+    target: PointCloud,
     *,
     squared: bool = False,
     index: NeighborIndex | None = None,
 ) -> torch.Tensor:
     """Return one nearest-target distance for every packed source point."""
-    source_cloud, target_cloud, _ = _validate_pair(source, target)
     if index is None:
-        index = NeighborIndex(target_cloud)
-    elif index.reference.points.data_ptr() != target_cloud.points.data_ptr():
-        raise ValueError("index must have been built for target")
-    distances2 = index.knn(source_cloud, 1).distances2[:, 0]
+        index = NeighborIndex(target)
+    distances2 = index.knn(source, 1).distances2[:, 0]
     return distances2 if squared else _safe_sqrt(distances2)
 
 
 def chamfer_distance(
-    source: torch.Tensor | PointCloud,
-    target: torch.Tensor | PointCloud,
+    source: PointCloudLike,
+    target: PointCloudLike,
     *,
     squared: bool = True,
     directional: str = "both",
@@ -106,7 +90,9 @@ def chamfer_distance(
     reduction: str = "mean",
 ) -> torch.Tensor:
     """Compute directed or bidirectional Chamfer distance over packed batches."""
-    source_cloud, target_cloud, _ = _validate_pair(source, target)
+    source_cloud = as_point_cloud(source, "source")
+    target_cloud = as_point_cloud(target, "target")
+    _validate_pair(source_cloud, target_cloud)
     if directional not in {"both", "source_to_target", "target_to_source"}:
         raise ValueError(
             "directional must be 'both', 'source_to_target', or 'target_to_source'"
@@ -135,14 +121,14 @@ def chamfer_distance(
 
 
 def fscore(
-    prediction: torch.Tensor | PointCloud,
-    reference: torch.Tensor | PointCloud,
+    prediction: PointCloudLike,
+    reference: PointCloudLike,
     threshold: float | torch.Tensor,
 ) -> FScoreResult:
-    """Return per-batch precision, recall, and F-score at one or more thresholds."""
-    prediction_cloud, reference_cloud, unbatched = _validate_pair(
-        prediction, reference
-    )
+    """Return per-batch precision, recall, and F-score at one threshold."""
+    prediction_cloud = as_point_cloud(prediction, "prediction")
+    reference_cloud = as_point_cloud(reference, "reference")
+    _validate_pair(prediction_cloud, reference_cloud)
     prediction_distances = _directed_nearest_distance(
         prediction_cloud, reference_cloud
     )
@@ -155,7 +141,6 @@ def fscore(
         reference_distances,
         reference_cloud,
         threshold,
-        unbatched=unbatched,
     )
 
 
@@ -165,26 +150,22 @@ def _fscore_from_distances(
     reference_distances: torch.Tensor,
     reference_cloud: PointCloud,
     threshold: float | torch.Tensor,
-    *,
-    unbatched: bool,
 ) -> FScoreResult:
-    thresholds = torch.as_tensor(
+    threshold_value = torch.as_tensor(
         threshold, dtype=prediction_cloud.dtype, device=prediction_cloud.device
     )
-    scalar_threshold = thresholds.ndim == 0
-    if thresholds.ndim > 1:
-        raise ValueError("threshold must be a scalar or one-dimensional tensor")
-    thresholds = thresholds.reshape(-1)
-    if bool(torch.any(thresholds <= 0)):
+    if threshold_value.ndim != 0:
+        raise ValueError("threshold must be a scalar")
+    if bool(threshold_value <= 0):
         raise ValueError("threshold must be positive")
 
     precision = _point_reduce(
-        (prediction_distances[:, None] <= thresholds).to(prediction_cloud.dtype),
+        (prediction_distances <= threshold_value).to(prediction_cloud.dtype),
         prediction_cloud,
         "mean",
     )
     recall = _point_reduce(
-        (reference_distances[:, None] <= thresholds).to(reference_cloud.dtype),
+        (reference_distances <= threshold_value).to(reference_cloud.dtype),
         reference_cloud,
         "mean",
     )
@@ -196,22 +177,18 @@ def _fscore_from_distances(
         ),
         torch.zeros_like(denominator),
     )
-    if scalar_threshold:
-        precision, recall, f1 = precision[:, 0], recall[:, 0], f1[:, 0]
-    if unbatched:
-        precision, recall, f1 = precision.squeeze(0), recall.squeeze(0), f1.squeeze(0)
     return FScoreResult(precision=precision, recall=recall, f1_score=f1)
 
 
 def point_cloud_metrics(
-    prediction: torch.Tensor | PointCloud,
-    reference: torch.Tensor | PointCloud,
+    prediction: PointCloudLike,
+    reference: PointCloudLike,
     threshold: float | torch.Tensor,
 ) -> PointCloudMetrics:
     """Compute unsquared accuracy, completion, Chamfer, and F-score metrics."""
-    prediction_cloud, reference_cloud, unbatched = _validate_pair(
-        prediction, reference
-    )
+    prediction_cloud = as_point_cloud(prediction, "prediction")
+    reference_cloud = as_point_cloud(reference, "reference")
+    _validate_pair(prediction_cloud, reference_cloud)
     prediction_distances = _directed_nearest_distance(
         prediction_cloud, reference_cloud
     )
@@ -226,29 +203,15 @@ def point_cloud_metrics(
         reference_distances,
         reference_cloud,
         threshold,
-        unbatched=False,
     )
     chamfer = (accuracy + completion) / 2
-    if unbatched:
-        accuracy = accuracy.squeeze(0)
-        completion = completion.squeeze(0)
-        chamfer = chamfer.squeeze(0)
-        precision = scores.precision.squeeze(0)
-        recall = scores.recall.squeeze(0)
-        f1 = scores.f1_score.squeeze(0)
-    else:
-        precision, recall, f1 = (
-            scores.precision,
-            scores.recall,
-            scores.f1_score,
-        )
     return PointCloudMetrics(
         accuracy=accuracy,
         completion=completion,
         chamfer_distance=chamfer,
-        precision=precision,
-        recall=recall,
-        f1_score=f1,
+        precision=scores.precision,
+        recall=scores.recall,
+        f1_score=scores.f1_score,
     )
 
 

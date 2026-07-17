@@ -1,8 +1,10 @@
 """Rigid transformation helpers (pure torch, device- and dtype-agnostic)."""
 
+from typing import overload
+
 import torch
 
-from .cloud import PointCloud, batch_ids
+from .cloud import PointCloud, PointCloudLike, _normalize_cloud, batch_ids
 
 
 def _check_points(points: torch.Tensor, name: str) -> None:
@@ -21,87 +23,92 @@ def transform_points(points: torch.Tensor, transformation: torch.Tensor) -> torc
     return points @ rotation.T + translation
 
 
+@overload
 def transform(
-    cloud: torch.Tensor | PointCloud,
+    cloud: torch.Tensor,
+    transformations: torch.Tensor,
+) -> torch.Tensor: ...
+
+
+@overload
+def transform(
+    cloud: PointCloud,
+    transformations: torch.Tensor,
+) -> PointCloud: ...
+
+
+def transform(
+    cloud: PointCloudLike,
     transformations: torch.Tensor,
 ) -> torch.Tensor | PointCloud:
     """Apply rigid transforms to points or a packed point-cloud batch.
 
-    A tensor input must have shape ``(N, 3)`` and uses one ``(4, 4)``
-    transform. A :class:`PointCloud` accepts one transform for the whole cloud
-    or ``(B, 4, 4)`` transforms. Attached normals are rotated without
-    translation and attached features are shared with the returned cloud.
-    Geometry uses the promoted dtype of the points and transforms.
+    Tensor inputs may have shape ``(N, 3)`` or ``(B, N, 3)`` and retain that
+    shape. A single ``(4, 4)`` transform broadcasts over the batch; otherwise
+    transformations must have shape ``(B, 4, 4)``. Attached normals are
+    rotated without translation and attached features are shared. Geometry
+    uses the promoted dtype of the points and transforms.
     """
     if not isinstance(transformations, torch.Tensor):
         raise TypeError("transformations must be a torch.Tensor")
     if transformations.dtype not in (torch.float32, torch.float64):
         raise ValueError("transformations must have dtype float32 or float64")
 
-    if isinstance(cloud, torch.Tensor):
-        _check_points(cloud, "points")
-        if cloud.dtype not in (torch.float32, torch.float64):
-            raise ValueError("points must have dtype float32 or float64")
-        if transformations.shape != (4, 4):
-            raise ValueError(
-                "an unbatched tensor requires transformations with shape (4, 4)"
-            )
-        if cloud.device != transformations.device:
-            raise ValueError("points and transformations must be on the same device")
-        dtype = torch.promote_types(cloud.dtype, transformations.dtype)
-        points = cloud.to(dtype)
-        matrix = transformations.to(dtype)
-        return points @ matrix[:3, :3].T + matrix[:3, 3]
-
-    if not isinstance(cloud, PointCloud):
-        raise TypeError(
-            f"cloud must be a torch.Tensor or PointCloud, got {type(cloud).__name__}"
-        )
-    if transformations.device != cloud.device:
+    normalized = _normalize_cloud(cloud, "cloud")
+    packed = normalized.cloud
+    if transformations.device != packed.device:
         raise ValueError("cloud and transformations must be on the same device")
     if transformations.shape == (4, 4):
-        transformations = transformations.unsqueeze(0).expand(cloud.batch_size, -1, -1)
-    elif transformations.shape != (cloud.batch_size, 4, 4):
+        transformations = transformations.unsqueeze(0).expand(
+            packed.batch_size, -1, -1
+        )
+    elif transformations.shape != (packed.batch_size, 4, 4):
         raise ValueError(
             f"transformations must have shape (4, 4) or "
-            f"({cloud.batch_size}, 4, 4), got {tuple(transformations.shape)}"
+            f"({packed.batch_size}, 4, 4), got {tuple(transformations.shape)}"
         )
 
-    dtype = torch.promote_types(cloud.dtype, transformations.dtype)
-    points = cloud.points.to(dtype)
+    dtype = torch.promote_types(packed.dtype, transformations.dtype)
+    points = packed.points.to(dtype)
     matrices = transformations.to(dtype)
-    if cloud.batch_size == 1:
+    if packed.batch_size == 1:
         rotation = matrices[0, :3, :3]
         transformed_points = points @ rotation.T + matrices[0, :3, 3]
         transformed_normals = None
-        if cloud.normals is not None:
-            transformed_normals = cloud.normals.to(dtype) @ rotation.T
-        return PointCloud._from_validated(
+        if packed.normals is not None:
+            transformed_normals = packed.normals.to(dtype) @ rotation.T
+        result = PointCloud._from_validated(
             transformed_points,
-            cloud.offsets,
+            packed.offsets,
             transformed_normals,
-            cloud.features,
+            packed.features,
+        )
+    else:
+        ids = batch_ids(packed.offsets, packed.points.shape[0])
+        rotations = matrices[ids, :3, :3]
+        translations = matrices[ids, :3, 3]
+        transformed_points = torch.bmm(
+            rotations, points.unsqueeze(-1)
+        ).squeeze(-1)
+        transformed_points = transformed_points + translations
+
+        transformed_normals = None
+        if packed.normals is not None:
+            normals = packed.normals.to(dtype)
+            transformed_normals = torch.bmm(
+                rotations, normals.unsqueeze(-1)
+            ).squeeze(-1)
+
+        result = PointCloud._from_validated(
+            transformed_points,
+            packed.offsets,
+            transformed_normals,
+            packed.features,
         )
 
-    ids = batch_ids(cloud.offsets, cloud.points.shape[0])
-    rotations = matrices[ids, :3, :3]
-    translations = matrices[ids, :3, 3]
-    transformed_points = torch.bmm(rotations, points.unsqueeze(-1)).squeeze(-1)
-    transformed_points = transformed_points + translations
-
-    transformed_normals = None
-    if cloud.normals is not None:
-        normals = cloud.normals.to(dtype)
-        transformed_normals = torch.bmm(
-            rotations, normals.unsqueeze(-1)
-        ).squeeze(-1)
-
-    return PointCloud._from_validated(
-        transformed_points,
-        cloud.offsets,
-        transformed_normals,
-        cloud.features,
-    )
+    if normalized.tensor_input:
+        return result.points.reshape(*normalized.leading_shape, 3)
+    return result
 
 
 def pose_to_matrix(pose: torch.Tensor) -> torch.Tensor:

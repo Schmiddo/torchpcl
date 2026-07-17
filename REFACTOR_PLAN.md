@@ -42,7 +42,8 @@ Revisit them only if a phase exposes a concrete problem.
   nondecreasing, and end at `P`.
 - Empty batch elements are valid. An entirely empty reference cloud may be
   rejected by operations that cannot define a result for it.
-- Public convenience functions also accept an unbatched `(N, 3)` tensor.
+- Public convenience functions accept an `(N, 3)` tensor as a one-cloud batch
+  and a `(B, N, 3)` tensor as `B` equal-length clouds.
 - Padded `(B, N, 3)` tensors are converted explicitly with `from_padded`; core
   algorithms do not accept padding and lengths as an alternate internal path.
 - Indices into packed data are always global row indices.
@@ -95,6 +96,7 @@ import torchpcl as tp
 cloud = tp.PointCloud(points, offsets)
 cloud = tp.PointCloud.from_points(points)                  # (N, 3)
 cloud = tp.PointCloud.from_padded(points, lengths)         # (B, N, 3)
+cloud = tp.as_point_cloud(dense_points)                    # (N, 3) or (B, N, 3)
 padded, lengths = cloud.to_padded()
 
 # Geometry
@@ -217,7 +219,7 @@ Status: implemented on 2026-07-12.
    immutable dataclasses with tensor storage shared unless an explicit copy is
    requested.
 4. Implement `transform` for:
-   - an unbatched tensor and one `(4, 4)` transform;
+   - `(N, 3)` and `(B, N, 3)` tensors with broadcast or batched transforms;
    - a `PointCloud` and `(B, 4, 4)` transforms;
    - normals, using rotation only when normals are attached.
 5. Implement an internal `batch_ids(offsets)` helper. Cache it only after
@@ -361,8 +363,8 @@ piecewise-differentiable gathered distances.
    - `reduction: "none" | "mean" | "sum"` over batches.
 3. Implement segmented reductions over packed points. Avoid converting offsets
    to Python lists or looping over batches.
-4. Implement `fscore` with scalar or tensor thresholds. Return precision,
-   recall, and F-score tensors per batch and threshold.
+4. Implement `fscore` with one scalar threshold per call. Return precision,
+   recall, and F-score tensors per batch.
 5. Add Hausdorff distance and normal consistency only after Chamfer and F-score
    are stable.
 6. Replace Python-float metric dataclasses with tensor-valued result types.
@@ -374,7 +376,7 @@ piecewise-differentiable gathered distances.
 ### Completion gate
 
 - Metrics support unbatched and ragged batched clouds through one code path.
-- `reduction="none"` returns `(B,)` or `(B, T)` tensors on the input device.
+- Per-cloud metric results return `(B,)` tensors on the input device.
 - Chamfer gradients are finite at zero distance and tested on CPU and CUDA.
 - No per-cloud Python loop or implicit host synchronization remains.
 

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
-from .cloud import PointCloud, as_cloud, batch_ids
+from .cloud import (
+    PointCloud,
+    PointCloudLike,
+    _normalize_cloud,
+    _pack_aligned_shape,
+    batch_ids,
+)
 
 
 @dataclass(frozen=True, eq=False)
@@ -17,17 +23,25 @@ class Voxelization:
     coordinates: torch.Tensor
     point_to_voxel: torch.Tensor
     counts: torch.Tensor
+    _input_leading_shape: tuple[int, ...] | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self._input_leading_shape is None:
+            object.__setattr__(
+                self, "_input_leading_shape", (self.point_to_voxel.shape[0],)
+            )
 
     def reduce(self, values: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
         """Reduce point-aligned values using the existing voxel partition."""
-        if not isinstance(values, torch.Tensor):
-            raise TypeError("values must be a torch.Tensor")
-        if values.ndim < 1 or values.shape[0] != self.point_to_voxel.shape[0]:
-            raise ValueError(
-                "values must have the same leading dimension as the input points"
-            )
-        if values.device != self.point_to_voxel.device:
-            raise ValueError("values and voxelization must be on the same device")
+        leading_shape = self._input_leading_shape
+        assert leading_shape is not None
+        values = _pack_aligned_shape(
+            values,
+            leading_shape,
+            self.point_to_voxel.shape[0],
+            self.point_to_voxel.device,
+            "values",
+        )
         if reduction not in {"mean", "sum", "min", "max", "first"}:
             raise ValueError("reduction must be mean, sum, min, max, or first")
 
@@ -67,11 +81,12 @@ class Voxelization:
 
 
 def voxelize(
-    cloud: torch.Tensor | PointCloud,
+    cloud: PointCloudLike,
     voxel_size: float,
 ) -> Voxelization:
     """Group packed points by ``floor(point / voxel_size)`` and average them."""
-    packed = as_cloud(cloud)
+    normalized = _normalize_cloud(cloud)
+    packed = normalized.cloud
     if voxel_size <= 0:
         raise ValueError("voxel_size must be positive")
 
@@ -125,6 +140,7 @@ def voxelize(
         coordinates=coordinates,
         point_to_voxel=inverse,
         counts=counts,
+        _input_leading_shape=normalized.leading_shape,
     )
 
 

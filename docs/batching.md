@@ -4,6 +4,18 @@ Point clouds are ragged: storing every cloud at a shared padded length wastes
 memory and complicates geometric operations. torchpcl therefore uses packed
 points and offsets as its canonical batch representation.
 
+Public operations also accept dense tensors:
+
+| Input | Interpretation | Canonical points |
+| --- | --- | --- |
+| `(N, 3)` | One cloud | `(N, 3)` |
+| `(B, N, 3)` | `B` equal-length clouds | `(B * N, 3)` |
+| `PointCloud` | Packed ragged batch | `(P, 3)` |
+
+Use `as_point_cloud(value)` when the canonical representation is useful to
+application code. Dense tensor batches are reshaped without copying when their
+storage layout allows it.
+
 ## Representation
 
 For lengths `[2, 0, 3]`, offsets are `[0, 2, 2, 5]` and points have shape
@@ -32,6 +44,9 @@ Padding beyond each input length is ignored. `to_padded` pads to the longest
 cloud and returns points and lengths; attached feature padding must be handled
 separately.
 
+Public algorithms do not accept lengths separately. Convert variable-length
+padded tensors with `PointCloud.from_padded` first.
+
 ## Operation Semantics
 
 - `transform`, `voxelize`, search, normals, metrics, and registration share the
@@ -43,6 +58,10 @@ separately.
 - Search pairs queries and references by batch position.
 - ICP tracks active, converged, and failed entries independently.
 - `reduction="none"` returns one metric value per batch entry.
+- Point-aligned inputs use `(N, ...)` with a single tensor, `(B, N, ...)` with
+  a dense tensor batch, and `(P, ...)` with a packed cloud.
+- Per-cloud result fields retain the batch dimension, including for `(N, 3)`
+  tensor inputs.
 
 Storage, transforms, voxelization, and search allow empty entries. Queries
 paired with an empty reference batch receive all-invalid neighbor rows rather

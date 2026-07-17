@@ -9,7 +9,7 @@ from conftest import random_cloud
 def test_identical_clouds(search_device):
     points = random_cloud(1000, search_device, seed=0)
     m = point_cloud_metrics(points, points, threshold=0.01)
-    zero = torch.zeros((), dtype=points.dtype, device=points.device)
+    zero = torch.zeros(1, dtype=points.dtype, device=points.device)
     torch.testing.assert_close(m.accuracy, zero, atol=1e-7, rtol=0)
     torch.testing.assert_close(m.completion, zero, atol=1e-7, rtol=0)
     torch.testing.assert_close(m.chamfer_distance, zero, atol=1e-7, rtol=0)
@@ -27,7 +27,7 @@ def test_known_shift(search_device):
     prediction = grid + torch.tensor([shift, 0.0, 0.0], dtype=torch.float64, device=search_device)
 
     m = point_cloud_metrics(prediction, grid, threshold=0.2)
-    expected = torch.tensor(shift, dtype=grid.dtype, device=grid.device)
+    expected = torch.tensor([shift], dtype=grid.dtype, device=grid.device)
     torch.testing.assert_close(m.accuracy, expected, atol=1e-7, rtol=0)
     torch.testing.assert_close(m.completion, expected, atol=1e-7, rtol=0)
     torch.testing.assert_close(m.chamfer_distance, expected, atol=1e-7, rtol=0)
@@ -37,12 +37,12 @@ def test_known_shift(search_device):
     assert tight.precision == 0.0 and tight.recall == 0.0 and tight.f1_score == 0.0
 
 
-def test_unbatched_fscore_returns_device_scalars(search_device):
+def test_unbatched_fscore_retains_batch_dimension(search_device):
     points = random_cloud(100, search_device, seed=5)
 
     scores = fscore(points, points, threshold=0.01)
 
-    assert scores.precision.shape == ()
+    assert scores.precision.shape == (1,)
     assert scores.precision.device == points.device
     torch.testing.assert_close(scores.f1_score, torch.ones_like(scores.f1_score))
 
