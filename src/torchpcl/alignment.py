@@ -39,7 +39,7 @@ def _procrustes_packed(
     target: torch.Tensor,
     weights: torch.Tensor,
     ids: torch.Tensor,
-    batch_size: int,
+    offsets: torch.Tensor,
     *,
     estimate_scale: bool,
 ) -> tuple[ProcrustesResult, torch.Tensor]:
@@ -49,19 +49,18 @@ def _procrustes_packed(
     degenerate correspondence sets. Zero-weight batches are permitted here so
     inference-only registration can mask inactive entries after solving.
     """
-    weight_sum = segment_sum(weights, ids, batch_size)
+    batch_size = offsets.shape[0] - 1
+    weight_sum = segment_sum(weights, offsets)
     safe_weight_sum = weight_sum.clamp_min(torch.finfo(weights.dtype).tiny)
-    source_mean = segment_sum(source * weights[:, None], ids, batch_size)
+    source_mean = segment_sum(source * weights[:, None], offsets)
     source_mean = source_mean / safe_weight_sum[:, None]
-    target_mean = segment_sum(target * weights[:, None], ids, batch_size)
+    target_mean = segment_sum(target * weights[:, None], offsets)
     target_mean = target_mean / safe_weight_sum[:, None]
 
     centered_source = source - source_mean[ids]
     centered_target = target - target_mean[ids]
     covariance = centered_source[:, :, None] * centered_target[:, None, :]
-    covariance = segment_sum(
-        covariance * weights[:, None, None], ids, batch_size
-    )
+    covariance = segment_sum(covariance * weights[:, None, None], offsets)
 
     u, singular_values, vh = torch.linalg.svd(covariance)
     v = vh.transpose(1, 2)
@@ -75,7 +74,7 @@ def _procrustes_packed(
 
     if estimate_scale:
         source_variance = segment_sum(
-            weights * centered_source.square().sum(dim=1), ids, batch_size
+            weights * centered_source.square().sum(dim=1), offsets
         )
         scale = (singular_values * diagonal).sum(dim=1) / source_variance.clamp_min(
             torch.finfo(source.dtype).tiny
@@ -141,7 +140,7 @@ def procrustes(
 
     ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
     positive_counts = segment_sum(
-        (point_weights > 0).to(torch.int64), ids, source_cloud.batch_size
+        (point_weights > 0).to(source_cloud.dtype), source_cloud.offsets
     )
     if bool(torch.any(positive_counts < 3)):
         raise ValueError("each batch entry needs at least 3 positively weighted points")
@@ -151,7 +150,7 @@ def procrustes(
         target_cloud.points,
         point_weights,
         ids,
-        source_cloud.batch_size,
+        source_cloud.offsets,
         estimate_scale=estimate_scale,
     )
     tolerance = singular_values[:, :1] * (

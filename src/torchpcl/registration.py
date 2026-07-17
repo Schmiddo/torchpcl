@@ -89,7 +89,6 @@ def _evaluate(
     index: NeighborIndex,
     transforms: torch.Tensor,
     max_distance: float,
-    source_ids: torch.Tensor,
 ) -> _Evaluation:
     current_cloud = transform(source, transforms)
     assert isinstance(current_cloud, PointCloud)
@@ -98,12 +97,12 @@ def _evaluate(
     valid = neighbors.valid[:, 0]
     target_points = target.points[indices.clamp(min=0)]
     distances2 = neighbors.distances2[:, 0].masked_fill(~valid, 0)
-    counts = segment_sum(valid.to(torch.int64), source_ids, source.batch_size)
-    squared_error = segment_sum(distances2, source_ids, source.batch_size)
-    fitness = counts.to(source.dtype) / source.lengths.to(source.dtype)
+    counts = segment_sum(valid.to(source.dtype), source.offsets)
+    squared_error = segment_sum(distances2, source.offsets)
+    fitness = counts / source.lengths.to(source.dtype)
     rmse = torch.where(
         counts > 0,
-        (squared_error / counts.clamp(min=1).to(source.dtype)).sqrt(),
+        (squared_error / counts.clamp(min=1)).sqrt(),
         torch.zeros_like(squared_error),
     )
     return _Evaluation(
@@ -143,7 +142,7 @@ def _point_to_point_delta(
     evaluation: _Evaluation,
     active: torch.Tensor,
     ids: torch.Tensor,
-    batch_size: int,
+    offsets: torch.Tensor,
     robust_kernel: str | None,
     robust_delta: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -161,7 +160,7 @@ def _point_to_point_delta(
         evaluation.target,
         weights,
         ids,
-        batch_size,
+        offsets,
         estimate_scale=False,
     )
     delta = alignment.transforms
@@ -176,7 +175,7 @@ def _point_to_plane_delta(
     normals: torch.Tensor,
     active: torch.Tensor,
     ids: torch.Tensor,
-    batch_size: int,
+    offsets: torch.Tensor,
     robust_kernel: str | None,
     robust_delta: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -198,12 +197,9 @@ def _point_to_plane_delta(
     )
     jtj = segment_sum(
         jacobian[:, :, None] * jacobian[:, None, :] * weights[:, None, None],
-        ids,
-        batch_size,
+        offsets,
     )
-    jtr = segment_sum(
-        jacobian * residual[:, None] * weights[:, None], ids, batch_size
-    )
+    jtr = segment_sum(jacobian * residual[:, None] * weights[:, None], offsets)
     pose, info = torch.linalg.solve_ex(jtj, -jtr)
     delta = _poses_to_matrices(pose)
     solvable = (
@@ -302,7 +298,6 @@ def icp(
             index,
             transforms,
             max_distance,
-            source_ids,
         )
         active = active & (evaluation.counts >= minimum)
         if iteration > 0:
@@ -318,7 +313,7 @@ def icp(
                 evaluation,
                 active,
                 source_ids,
-                batch_size,
+                source_cloud.offsets,
                 robust_kernel,
                 robust_delta,
             )
@@ -329,7 +324,7 @@ def icp(
                 normals,
                 active,
                 source_ids,
-                batch_size,
+                source_cloud.offsets,
                 robust_kernel,
                 robust_delta,
             )
@@ -352,7 +347,6 @@ def icp(
         index,
         transforms,
         max_distance,
-        source_ids,
     )
     return ICPResult(
         transforms=transforms,
@@ -377,14 +371,12 @@ def evaluate_registration(
     matrices = _initial_transforms(source_cloud, transforms)
     if index is None:
         index = NeighborIndex(target_cloud)
-    source_ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
     evaluation = _evaluate(
         source_cloud,
         target_cloud,
         index,
         matrices,
         max_distance,
-        source_ids,
     )
     return RegistrationMetrics(
         transforms=matrices,

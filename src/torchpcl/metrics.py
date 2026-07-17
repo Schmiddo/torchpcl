@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from ._segments import segment_sum
-from .cloud import PointCloud, as_cloud, batch_ids
+from .cloud import PointCloud, as_cloud
 from .neighbors import NeighborIndex
 
 
@@ -61,8 +61,7 @@ def _point_reduce(
 ) -> torch.Tensor:
     if reduction not in {"mean", "sum"}:
         raise ValueError("point_reduction must be 'mean' or 'sum'")
-    ids = batch_ids(cloud.offsets, cloud.points.shape[0])
-    result = segment_sum(values, ids, cloud.batch_size)
+    result = segment_sum(values, cloud.offsets)
     if reduction == "mean":
         shape = (cloud.batch_size, *([1] * (values.ndim - 1)))
         result = result / cloud.lengths.to(values.dtype).reshape(shape)
