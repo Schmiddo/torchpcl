@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from ._segments import segment_mean, segment_sum
+from ._segments import segment_mean
 from .cloud import PointCloud, PointCloudLike, as_point_cloud
 from .neighbors import NeighborIndex
 from .validation import check_cloud_pair
@@ -29,18 +29,6 @@ class PointCloudMetrics:
     f1_score: torch.Tensor
 
 
-def _validate_pair(
-    source: PointCloud,
-    target: PointCloud,
-) -> None:
-    check_cloud_pair(source, target, "source", "target", non_empty=True)
-
-
-def _safe_sqrt(values: torch.Tensor) -> torch.Tensor:
-    positive = values > 0
-    return torch.where(positive, values, torch.ones_like(values)).sqrt() * positive
-
-
 def _batch_reduce(values: torch.Tensor, reduction: str) -> torch.Tensor:
     if reduction == "none":
         return values
@@ -56,13 +44,15 @@ def _directed_nearest_distance(
     target: PointCloud,
     *,
     squared: bool = False,
-    index: NeighborIndex | None = None,
 ) -> torch.Tensor:
     """Return one nearest-target distance for every packed source point."""
-    if index is None:
-        index = NeighborIndex(target)
-    distances2 = index.knn(source, 1).distances2[:, 0]
-    return distances2 if squared else _safe_sqrt(distances2)
+    distances2 = NeighborIndex(target).knn(source, 1).distances2[:, 0]
+    if squared:
+        return distances2
+
+    # guard against nan grad in sqrt for zero distance
+    positive = distances2 > 0
+    return torch.where(positive, distances2, torch.ones_like(distances2)).sqrt() * positive
 
 
 def chamfer_distance(
@@ -83,7 +73,7 @@ def chamfer_distance(
     """
     source_cloud = as_point_cloud(source, "source")
     target_cloud = as_point_cloud(target, "target")
-    _validate_pair(source_cloud, target_cloud)
+    check_cloud_pair(source_cloud, target_cloud, "source", "target", non_empty=True)
 
     values = _directed_nearest_distance(
         source_cloud, target_cloud, squared=squared
@@ -94,8 +84,8 @@ def chamfer_distance(
         values = _directed_nearest_distance(
             target_cloud, source_cloud, squared=squared
         )
-        result = result + segment_mean(values, target_cloud.offsets)
-        result = result / 2
+        reverse = segment_mean(values, target_cloud.offsets)
+        result = (result + reverse) / 2
 
     return _batch_reduce(result, reduction)
 
@@ -108,7 +98,7 @@ def fscore(
     """Return per-batch precision, recall, and F-score at one threshold."""
     prediction_cloud = as_point_cloud(prediction, "prediction")
     reference_cloud = as_point_cloud(reference, "reference")
-    _validate_pair(prediction_cloud, reference_cloud)
+    check_cloud_pair(prediction_cloud, reference_cloud, "source", "target", non_empty=True)
     prediction_distances = _directed_nearest_distance(
         prediction_cloud, reference_cloud
     )
@@ -166,7 +156,7 @@ def point_cloud_metrics(
     """Compute unsquared accuracy, completion, Chamfer, and F-score metrics."""
     prediction_cloud = as_point_cloud(prediction, "prediction")
     reference_cloud = as_point_cloud(reference, "reference")
-    _validate_pair(prediction_cloud, reference_cloud)
+    check_cloud_pair(prediction_cloud, reference_cloud, "source", "target", non_empty=True)
     prediction_distances = _directed_nearest_distance(
         prediction_cloud, reference_cloud
     )
