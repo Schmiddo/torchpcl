@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from ._segments import segment_sum
+from ._segments import segment_mean, segment_sum
 from .cloud import PointCloud, PointCloudLike, as_point_cloud
 from .neighbors import NeighborIndex
 from .validation import check_cloud_pair
@@ -41,20 +41,6 @@ def _safe_sqrt(values: torch.Tensor) -> torch.Tensor:
     return torch.where(positive, values, torch.ones_like(values)).sqrt() * positive
 
 
-def _point_reduce(
-    values: torch.Tensor,
-    cloud: PointCloud,
-    reduction: str,
-) -> torch.Tensor:
-    if reduction not in {"mean", "sum"}:
-        raise ValueError("point_reduction must be 'mean' or 'sum'")
-    result = segment_sum(values, cloud.offsets)
-    if reduction == "mean":
-        shape = (cloud.batch_size, *([1] * (values.ndim - 1)))
-        result = result / cloud.lengths.to(values.dtype).reshape(shape)
-    return result
-
-
 def _batch_reduce(values: torch.Tensor, reduction: str) -> torch.Tensor:
     if reduction == "none":
         return values
@@ -84,39 +70,33 @@ def chamfer_distance(
     target: PointCloudLike,
     *,
     squared: bool = True,
-    directional: str = "both",
-    combine: str = "mean",
-    point_reduction: str = "mean",
+    bidirectional: bool = True,
     reduction: str = "mean",
 ) -> torch.Tensor:
-    """Compute directed or bidirectional Chamfer distance over packed batches."""
+    """Compute mean nearest-neighbor distances over point-cloud batches.
+
+    Each source point is matched to its nearest target point and the distances
+    are averaged per batch entry. When ``bidirectional`` is true, the reverse
+    mean distance is included and the two directions are averaged. Distances
+    are squared by default; ``reduction`` controls whether the per-batch values
+    are returned unchanged, averaged, or summed.
+    """
     source_cloud = as_point_cloud(source, "source")
     target_cloud = as_point_cloud(target, "target")
     _validate_pair(source_cloud, target_cloud)
-    if directional not in {"both", "source_to_target", "target_to_source"}:
-        raise ValueError(
-            "directional must be 'both', 'source_to_target', or 'target_to_source'"
-        )
-    if combine not in {"mean", "sum"}:
-        raise ValueError("combine must be 'mean' or 'sum'")
 
-    directed_values = []
-    if directional in {"both", "source_to_target"}:
-        values = _directed_nearest_distance(
-            source_cloud, target_cloud, squared=squared
-        )
-        directed_values.append(_point_reduce(values, source_cloud, point_reduction))
-    if directional in {"both", "target_to_source"}:
+    values = _directed_nearest_distance(
+        source_cloud, target_cloud, squared=squared
+    )
+    result = segment_mean(values, source_cloud.offsets)
+
+    if bidirectional:
         values = _directed_nearest_distance(
             target_cloud, source_cloud, squared=squared
         )
-        directed_values.append(_point_reduce(values, target_cloud, point_reduction))
+        result = result + segment_mean(values, target_cloud.offsets)
+        result = result / 2
 
-    result = directed_values[0]
-    if len(directed_values) == 2:
-        result = result + directed_values[1]
-        if combine == "mean":
-            result = result / 2
     return _batch_reduce(result, reduction)
 
 
@@ -159,15 +139,13 @@ def _fscore_from_distances(
     if bool(threshold_value <= 0):
         raise ValueError("threshold must be positive")
 
-    precision = _point_reduce(
+    precision = segment_mean(
         (prediction_distances <= threshold_value).to(prediction_cloud.dtype),
-        prediction_cloud,
-        "mean",
+        prediction_cloud.offsets,
     )
-    recall = _point_reduce(
+    recall = segment_mean(
         (reference_distances <= threshold_value).to(reference_cloud.dtype),
-        reference_cloud,
-        "mean",
+        reference_cloud.offsets,
     )
     denominator = precision + recall
     f1 = torch.where(
@@ -195,8 +173,8 @@ def point_cloud_metrics(
     reference_distances = _directed_nearest_distance(
         reference_cloud, prediction_cloud
     )
-    accuracy = _point_reduce(prediction_distances, prediction_cloud, "mean")
-    completion = _point_reduce(reference_distances, reference_cloud, "mean")
+    accuracy = segment_mean(prediction_distances, prediction_cloud.offsets)
+    completion = segment_mean(reference_distances, reference_cloud.offsets)
     scores = _fscore_from_distances(
         prediction_distances,
         prediction_cloud,
