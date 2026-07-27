@@ -31,6 +31,20 @@ toolkit is unavailable.
 Set `TORCH_CUDA_ARCH_LIST` to override local GPU architecture detection or
 `TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout.
 
+Published source distributions include the required cuBQL headers. When
+installing from a Git checkout, initialize the submodule first:
+
+```bash
+git submodule update --init third_party/cuBQL
+```
+
+NumPy, plyfile, and Trimesh are only needed by the repository's file-processing
+tools and optimization example. Install them with:
+
+```bash
+pip install --no-build-isolation ".[tools]"
+```
+
 ## Point Clouds
 
 An `(N, 3)` tensor represents one cloud, while a `(B, N, 3)` tensor represents
@@ -109,10 +123,10 @@ nearest.distances2    # squared distances in the input dtype
 nearest.valid         # explicit validity mask
 ```
 
-Valid candidates in each neighbor row are returned in nondecreasing distance
-order (nearest first). No guarantee is made about the ordering of candidates
-at equal distances. Queries paired with an empty reference batch receive
-all-invalid rows.
+The selected candidates are the nearest under the backend's float32 search
+coordinates, but their row order and tie resolution are unspecified. Squared
+distances are recomputed from the original tensors in their input dtype.
+Queries paired with an empty reference batch receive all-invalid rows.
 
 `tp.knn`, `tp.radius_neighbors`, and `tp.hybrid_neighbors` provide equivalent
 one-shot calls.
@@ -193,15 +207,18 @@ returns `RegistrationMetrics`.
 ## Behavior
 
 - Geometry supports float32 and float64 on CPU and CUDA.
+- Neighbor candidate selection uses float32 coordinates for both input dtypes.
+  Returned squared distances use the input dtype, so float64 inputs retain
+  float64 distance evaluation but not float64 candidate selection.
 - Paired inputs must have identical dtype, device, and batch size.
 - Procrustes alignment, transforms, voxel reductions, and gathered metric
   distances support autograd. Search indices are discrete; normals and ICP are
   inference-only.
-- CPU and CUDA may choose different indices for exact distance ties.
+- CPU and CUDA may choose different indices when float32 search distances tie.
 - Empty batch entries are supported by storage, transforms, voxelization, and
   search queries. Metrics and registration reject empty cloud pairs.
-- Multi-cloud batches currently use exact brute-force search; BVH indexing
-  currently supports a single reference cloud.
+- Multi-cloud batches currently use brute-force search; BVH indexing currently
+  supports a single reference cloud.
 
 ## Development
 

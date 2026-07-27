@@ -150,8 +150,8 @@ The native result is intentionally narrower than public `Neighbors`:
 - indices are int32;
 - distances are float32 search distances;
 - invalid indices are `-1`;
-- each row contains the k nearest candidates within the radius, in no
-  guaranteed order;
+- each row contains the k nearest candidates in float32 search coordinates
+  within the radius, in no guaranteed order;
 - invalid distance slots have no public semantic guarantee.
 
 The Python layer converts indices to int64, gathers reference points, recomputes
@@ -160,15 +160,16 @@ mask. This keeps gradients and user-visible semantics out of native code.
 
 ### No ordering guarantee
 
-Ordering is deliberately not part of the contract, native or public. Which
-candidates are returned — the k nearest within the radius — is guaranteed;
-their order within a row and the resolution of distance ties are not. The
-kernels happen to produce ascending distances today, but CPU, CUDA, BVH, and
-brute force are free to differ, and no internal consumer selects by position
-(normals reduce over all neighbors; ICP, Chamfer, and the metrics use
-`k == 1`). Consumers select by the validity mask. Tests that compare
-implementations against each other or against `torch.cdist` must compare
-order-insensitively.
+Ordering is deliberately not part of the contract, native or public. Candidate
+selection uses float32 coordinates, and the k nearest candidates within the
+radius in that search space are returned. Their order within a row and the
+resolution of distance ties are not guaranteed. The kernels happen to produce
+ascending distances today, but CPU, CUDA, BVH, and brute force are free to
+differ, and no internal consumer selects by position (normals reduce over all
+neighbors; ICP, Chamfer, and the metrics use `k == 1`). Consumers select by the
+validity mask. Tests that compare implementations against each other or against
+`torch.cdist` must account for float32 candidate selection and compare result
+ordering appropriately.
 
 ### Empty reference batches
 

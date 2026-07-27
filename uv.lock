@@ -2558,36 +2558,49 @@ name = "torchpcl"
 version = "0.2.0.dev0"
 source = { editable = "." }
 dependencies = [
+    { name = "torch" },
+]
+
+[package.optional-dependencies]
+tools = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "plyfile" },
-    { name = "torch" },
     { name = "trimesh" },
 ]
 
 [package.dev-dependencies]
 benchmark = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "open3d", marker = "python_full_version < '3.13'" },
     { name = "small-gicp" },
 ]
 dev = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "numpy", specifier = ">=2" },
-    { name = "plyfile", specifier = ">=1.1.4" },
+    { name = "numpy", marker = "extra == 'tools'", specifier = ">=2" },
+    { name = "plyfile", marker = "extra == 'tools'", specifier = ">=1.1.4" },
     { name = "torch", specifier = ">=2.10.0" },
-    { name = "trimesh", specifier = ">=4.6" },
+    { name = "trimesh", marker = "extra == 'tools'", specifier = ">=4.6" },
 ]
+provides-extras = ["tools"]
 
 [package.metadata.requires-dev]
 benchmark = [
+    { name = "numpy", specifier = ">=2" },
     { name = "open3d", marker = "python_full_version < '3.13'" },
     { name = "small-gicp" },
 ]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "numpy", specifier = ">=2" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "tqdm"

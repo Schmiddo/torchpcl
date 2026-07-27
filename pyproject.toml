@@ -4,12 +4,25 @@ version = "0.2.0.dev0"
 description = "Point cloud registration (ICP) and processing built on torch and cuBQL"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = [
+    "LICENSE",
+    "third_party/cuBQL/LICENSE",
+]
 dependencies = [
+    "torch>=2.10.0",
+]
+
+[project.optional-dependencies]
+tools = [
     "numpy>=2",
     "plyfile>=1.1.4",
-    "torch>=2.10.0",
     "trimesh>=4.6",
 ]
+
+[project.urls]
+Repository = "https://github.com/Schmiddo/torchpcl"
+Issues = "https://github.com/Schmiddo/torchpcl/issues"
 
 # The extensions build against the environment's torch (see setup.py), so
 # install with build isolation disabled (configured below for uv).
@@ -25,9 +38,11 @@ where = ["src"]
 
 [dependency-groups]
 dev = [
+    "numpy>=2",
     "pytest>=8",
 ]
 benchmark = [
+    "numpy>=2",
     "open3d; python_version < '3.13'",
     "small-gicp",
 ]

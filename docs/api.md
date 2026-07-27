@@ -79,9 +79,11 @@ the query point. Invalid normals are zero and identified by
 
 ### `NeighborIndex(reference, algorithm="auto")`
 
-Reusable exact index with `knn`, `radius`, and `hybrid` methods. `algorithm` is
+Reusable index with `knn`, `radius`, and `hybrid` methods. `algorithm` is
 `"auto"`, `"bvh"`, or `"bruteforce"`. Multi-cloud references use brute force;
-explicit BVH currently requires one cloud.
+explicit BVH currently requires one cloud. Candidate selection uses float32
+coordinates for both float32 and float64 inputs. Squared distances are
+recomputed from the original points and queries in their input dtype.
 
 One-shot equivalents:
 
@@ -89,22 +91,22 @@ One-shot equivalents:
 - `radius_neighbors(reference, queries, radius, max_neighbors=64, algorithm="auto")`
 - `hybrid_neighbors(reference, queries, radius, k, algorithm="auto")`
 
-Every call returns `Neighbors(indices, distances2, valid)`. Valid candidates in
-each row are returned in nondecreasing distance order (nearest first). The
-ordering of candidates at equal distances is unspecified.
+Every call returns `Neighbors(indices, distances2, valid)`. Candidate order and
+distance-tie resolution are unspecified.
 
 ## Metrics
 
 ### `chamfer_distance(...)`
 
 ```text
-chamfer_distance(source, target, *, squared=True, directional="both",
-                 combine="mean", point_reduction="mean",
+chamfer_distance(source, target, *, squared=True, bidirectional=True,
                  reduction="mean") -> Tensor
 ```
 
-`directional` is `"both"`, `"source_to_target"`, or `"target_to_source"`.
-`reduction="none"` returns one value per packed batch entry.
+The forward nearest-neighbor distances are averaged within each cloud. When
+`bidirectional=True`, the reverse mean is included and the two directions are
+averaged. `reduction="none"` returns one value per packed batch entry;
+`"mean"` and `"sum"` reduce those batch values.
 
 ### `fscore(prediction, reference, threshold)`
 

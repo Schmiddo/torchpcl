@@ -28,11 +28,14 @@ class Neighbors:
 
 
 class NeighborIndex:
-    """Reusable exact neighbor index over a packed reference cloud.
+    """Reusable neighbor index over a packed reference cloud.
 
     ``algorithm="auto"`` uses BVH for a single reference cloud and packed
     brute force for batches. The current BVH backend cannot represent multiple
     independent clouds, so explicit ``"bvh"`` is restricted to batch size one.
+    Candidate selection uses float32 coordinates for both float32 and float64
+    inputs. Public squared distances are recomputed from the original tensors
+    in their input dtype.
     """
 
     def __init__(

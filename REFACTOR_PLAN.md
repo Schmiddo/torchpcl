@@ -330,13 +330,12 @@ is intentionally inference-only.
 3. Start with `torch.linalg.eigh` for the batched `3x3` solve. Keep the current
    analytic eigensolver only if benchmarks demonstrate that it materially
    improves realistic workloads and its numerical tests are strong.
-4. Make self-neighbor inclusion explicit and default to inclusion.
+4. Include the query point when the cloud is searched against itself.
 5. Return `NormalResult` with a validity mask rather than silently relying on a
    zero vector.
-6. Support orientation modes:
-   - `"none"`;
-   - `"viewpoint"` with viewpoint `(3,)` or `(B, 3)`.
-7. Return curvature optionally from the covariance eigenvalues.
+6. Sign-align estimates to attached input normals when present; otherwise leave
+   signs unspecified.
+7. Return curvature from the covariance eigenvalues.
 8. Initially run under `torch.no_grad()` or document the operation as
    non-differentiable. Reconsider gradients only if a real use case appears.
 
@@ -358,8 +357,7 @@ piecewise-differentiable gathered distances.
    search and differentiable gathered-distance recomputation.
 2. Implement `chamfer_distance` with explicit options:
    - `squared: bool`;
-   - `directional: "both" | "source_to_target" | "target_to_source"`;
-   - `point_reduction: "mean" | "sum"`;
+   - `bidirectional: bool`;
    - `reduction: "none" | "mean" | "sum"` over batches.
 3. Implement segmented reductions over packed points. Avoid converting offsets
    to Python lists or looping over batches.
@@ -495,7 +493,7 @@ of raising.
 
 Status: documentation, migration guidance, public-surface tests, and benchmark
 coverage implemented on 2026-07-12. The final `0.2.0` release gate remains
-pending CUDA verification and the separately deferred Phase 8 work.
+pending CUDA verification.
 
 ### Tasks
 

@@ -8,7 +8,8 @@ wrappers are not retained.
 - Replace separate `NearestNeighborSearch` and `BatchedNearestNeighborSearch`
   usage with `NeighborIndex`.
 - Represent ragged data with `PointCloud(points, offsets)`.
-- Search results now include `indices`, exact `distances2`, and `valid`.
+- Search results now include `indices`, `distances2` recomputed in the input
+  dtype, and `valid`. Candidate selection uses float32 coordinates.
 - Packed indices are global, not local to a batch entry.
 
 ## Voxelization and Normals
@@ -55,4 +56,4 @@ to subsequent calls.
 - Failed ICP entries retain their last valid transform.
 - Empty cloud pairs are rejected by metrics and registration.
 - CPU and CUDA behavior is compared by distances and transforms rather than
-  exact tie-broken neighbor indices.
+  tie-broken neighbor indices.

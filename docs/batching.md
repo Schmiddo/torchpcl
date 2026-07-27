@@ -74,6 +74,11 @@ Geometry supports float32 and float64. Paired clouds must have identical dtype
 and device; torchpcl does not silently cast one geometry input to another.
 Offsets and point-aligned attributes must share the point device.
 
+Neighbor search selects candidates using float32 coordinates for both geometry
+dtypes. Public squared distances are recomputed from the original points and
+queries in their input dtype. Consequently, float64 search results retain
+float64 distance evaluation, while candidate identity has float32 precision.
+
 CUDA results stay on CUDA. Testing and application code should compare them
 with `torch.testing.assert_close` rather than NumPy-based helpers.
 
@@ -85,7 +90,6 @@ estimation, and ICP are discrete or inference-only. Chamfer gradients treat
 the selected neighbor as piecewise constant. Procrustes gradients require a
 nondegenerate correspondence set whose optimal rotation is locally unique.
 
-Neighbor candidates are returned in nondecreasing distance order (nearest
-first). Exact distance ties have no ordering guarantee and may choose different
-indices across CPU, CUDA, BVH, and brute-force backends. Distances and aggregate
-metrics should remain comparable.
+Neighbor candidate order and tie resolution are unspecified and may differ
+across CPU, CUDA, BVH, and brute-force backends. Distances and aggregate metrics
+should remain comparable.
