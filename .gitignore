@@ -1,3 +1,5 @@
+assets/
+
 __pycache__
 data/
 *.so
