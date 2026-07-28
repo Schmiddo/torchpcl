@@ -1,4 +1,4 @@
-"""Private adapter for the consolidated native search extension."""
+"""Private adapters for the consolidated native extension."""
 
 from __future__ import annotations
 
@@ -19,6 +19,15 @@ def _check_device(device: torch.device) -> None:
             )
         return
     raise RuntimeError(f"unsupported device '{device}' for torchpcl search")
+
+
+def symmetric_eigh_3x3(
+    matrices: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return sorted eigenvalues and the smallest eigenvector of symmetric 3x3s."""
+    if matrices.ndim < 2 or matrices.shape[-2:] != (3, 3):
+        raise ValueError("matrices must have shape (..., 3, 3)")
+    return _C.symmetric_eigh_3x3(matrices.contiguous())
 
 
 class BvhBackend:
@@ -72,4 +81,4 @@ class PackedBackend:
         )
 
 
-__all__ = ["BvhBackend", "PackedBackend"]
+__all__ = ["BvhBackend", "PackedBackend", "symmetric_eigh_3x3"]

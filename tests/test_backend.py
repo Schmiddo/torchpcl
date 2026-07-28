@@ -102,6 +102,15 @@ def test_native_argument_validation():
         _C.BvhIndex(torch.zeros(3, 2).t())
 
 
+def test_native_symmetric_eigh_argument_validation():
+    with pytest.raises(RuntimeError, match="float32 or float64"):
+        _C.symmetric_eigh_3x3(torch.zeros(2, 3, 3, dtype=torch.int64))
+    with pytest.raises(RuntimeError, match=r"shape \(\.\.\., 3, 3\)"):
+        _C.symmetric_eigh_3x3(torch.zeros(2, 3, 2))
+    with pytest.raises(RuntimeError, match="contiguous"):
+        _C.symmetric_eigh_3x3(torch.zeros(2, 3, 3).mT)
+
+
 @pytest.mark.skipif(
     not (torch.cuda.is_available() and _C.has_cuda()), reason="CUDA backend unavailable"
 )
@@ -112,5 +121,11 @@ def test_cuda_backend_uses_current_stream():
         queries = torch.rand(10, 3, device="cuda")
         indices, _ = _C.BvhIndex(points).knn(queries, 1, math.inf)
         marker = indices.clone()
+        matrices = torch.eye(3, device="cuda").expand(100, -1, -1).clone()
+        eigenvalues, eigenvectors = _C.symmetric_eigh_3x3(matrices)
+        eigenvalue_marker = eigenvalues.clone()
+        eigenvector_marker = eigenvectors.clone()
     stream.synchronize()
     assert (marker >= 0).all()
+    assert (eigenvalue_marker == 1).all()
+    assert (eigenvector_marker.norm(dim=-1) == 1).all()

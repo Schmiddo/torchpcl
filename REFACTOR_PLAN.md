@@ -115,12 +115,17 @@ distance = tp.chamfer_distance(prediction, reference, reduction="none")
 scores = tp.fscore(prediction, reference, threshold=0.05)
 
 # Registration
+target = tp.PointCloud.from_points(target_points, normals=normals)
 result = tp.icp(
     source,
     target,
-    method="point_to_plane",
-    target_normals=normals,
-    max_distance=0.1,
+    levels=[
+        tp.ICPLevel(
+            max_correspondence_distance=0.1,
+            max_iterations=30,
+        ),
+    ],
+    options=tp.ICPOptions(objective=tp.PointToPlane()),
 )
 ```
 
@@ -160,6 +165,7 @@ class ICPResult:
     iterations: Tensor          # (B,), integer
     fitness: Tensor             # (B,)
     inlier_rmse: Tensor         # (B,)
+    level_results: tuple[ICPLevelResult, ...]
 ```
 
 Result dataclasses contain tensors and metadata only. They must not trigger a
@@ -389,12 +395,9 @@ avoid running searches after all batch entries have converged or failed.
 
 ### Tasks
 
-1. Define a functional API with simple values rather than estimator classes:
-   - `method="point_to_point" | "point_to_plane"`;
-   - `max_distance`, `max_iterations`, `relative_fitness`, `relative_rmse`;
-   - optional per-batch initial transforms;
-   - optional target normals.
-2. Build or accept a reusable target `NeighborIndex` once per call.
+1. Define one functional `icp` API accepting a nonempty sequence of
+   `ICPLevel` configurations and shared `ICPOptions`.
+2. Build a private target `NeighborIndex` once per generated level.
 3. Track active batch elements with a boolean tensor. Converged or failed batch
    entries stop updating while other entries continue.
 4. Compute correspondences, counts, squared-error sums, and normal equations
@@ -413,8 +416,9 @@ avoid running searches after all batch entries have converged or failed.
    - RMSE is zero for no correspondences;
    - failed entries retain the last valid transform;
    - `converged=False` on failure or iteration exhaustion.
-9. Add robust weighting only after basic ICP works. Start with Huber; defer
-   trimming, reciprocal correspondences, colored ICP, and generalized ICP.
+9. Configure point-to-point and point-to-plane with objective objects. Configure
+   robust weighting with `HuberLoss`; defer trimming, reciprocal
+   correspondences, colored ICP, and generalized ICP.
 10. Treat ICP as non-differentiable initially. Do not add custom autograd.
 11. Implement `evaluate_registration` using the same correspondence and metric
     helpers, not a separate pipeline.
@@ -428,29 +432,30 @@ avoid running searches after all batch entries have converged or failed.
 - The iteration loop has no `.cpu()` or `.item()` calls.
 - CPU and CUDA produce comparable transforms on representative cases.
 
-## Phase 7: Add Multi-Scale ICP
+## Phase 7: Unify Single- and Multi-Scale ICP
 
-Status: implemented on 2026-07-12 with reusable point-cloud pyramids and
-cumulative iteration counts.
+Status: implemented with one level-sequence API and cumulative iteration
+counts.
 
 ### Tasks
 
-1. Add an `ICPScale` dataclass containing voxel size, maximum correspondence
-   distance, and iteration count.
-2. Implement `multiscale_icp` as composition of `voxelize`,
-   `estimate_normals`, and `icp`.
-3. Carry each scale's output transform into the next scale.
-4. Allow precomputed pyramids and normals so repeated registration does not
-   redo preprocessing.
-5. Keep scale orchestration in Python. Do not create a monolithic native
+1. Define `ICPLevel` with an optional voxel size, maximum correspondence
+   distance, and iteration count. `voxel_size=None` selects the original
+   clouds.
+2. Generate every voxelized level independently from the original clouds.
+3. Carry each level's output transform into the next level.
+4. Require point-to-plane normals to be attached to the target cloud and reduce
+   them into target voxels without implicit estimation.
+5. Return final metrics together with one `ICPLevelResult` per level.
+6. Keep level orchestration in Python. Do not create a monolithic native
    multi-scale operator.
 
 ### Completion gate
 
 - A synthetic case outside single-scale ICP's convergence basin is recovered by
-  the multi-scale pipeline.
+  a multi-level schedule.
 - Batched inputs work through the same API.
-- Precomputed and internally computed pyramids give equivalent results.
+- Single-scale ICP is represented by exactly one unvoxelized level.
 
 ## Phase 8: Consolidate Packaging and Native Dispatch
 

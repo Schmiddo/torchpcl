@@ -113,18 +113,30 @@ def bench_torchpcl_registration(rows, source_np, target_np, t_gt, args, device):
     source_down = downsample_points(source, args.voxel)
     target_down = downsample_points(target, args.voxel)
     normals = torchpcl.estimate_normals(target_down, k=args.normal_k).normals
-    methods = {
-        "point-to-point": dict(method="point_to_point"),
-        "point-to-plane": dict(method="point_to_plane", target_normals=normals),
+    target_with_normals = torchpcl.PointCloud.from_points(
+        target_down, normals=normals
+    )
+    level = torchpcl.ICPLevel(
+        max_correspondence_distance=args.max_corr_dist,
+        max_iterations=args.max_iters,
+    )
+    cases = {
+        "point-to-point": (
+            target_down,
+            torchpcl.ICPOptions(objective=torchpcl.PointToPoint()),
+        ),
+        "point-to-plane": (
+            target_with_normals,
+            torchpcl.ICPOptions(objective=torchpcl.PointToPlane()),
+        ),
     }
-    for name, kwargs in methods.items():
+    for name, (case_target, options) in cases.items():
         result, seconds = timed(
-            lambda kwargs=kwargs: torchpcl.icp(
+            lambda case_target=case_target, options=options: torchpcl.icp(
                 source_down,
-                target_down,
-                args.max_corr_dist,
-                max_iterations=args.max_iters,
-                **kwargs,
+                case_target,
+                [level],
+                options=options,
             ),
             args.repeats,
             device=device,
@@ -181,9 +193,13 @@ def bench_small_gicp_registration(rows, t_gt, args):
         ))
 
 
-def multiscale_scales(args):
+def multiscale_levels(args):
     return [
-        torchpcl.ICPScale(voxel, distance, iterations)
+        torchpcl.ICPLevel(
+            voxel_size=voxel,
+            max_correspondence_distance=distance,
+            max_iterations=iterations,
+        )
         for voxel, distance, iterations in zip(
             args.multiscale_voxels,
             args.multiscale_distances,
@@ -195,21 +211,32 @@ def multiscale_scales(args):
 def bench_torchpcl_multiscale(rows, source_np, target_np, t_gt, args, device):
     source = torch.from_numpy(source_np).to(device)
     target = torch.from_numpy(target_np).to(device)
-    scales = multiscale_scales(args)
+    levels = multiscale_levels(args)
     schedule = ", ".join(
-        f"{scale.voxel_size:g}/{scale.max_distance:g}/{scale.iterations}"
-        for scale in scales
+        f"{level.voxel_size:g}/{level.max_correspondence_distance:g}/"
+        f"{level.max_iterations}"
+        for level in levels
     )
 
-    for method in ("point_to_point", "point_to_plane"):
+    def run(objective):
+        case_target = target
+        if isinstance(objective, torchpcl.PointToPlane):
+            normals = torchpcl.estimate_normals(target, k=args.normal_k).normals
+            case_target = torchpcl.PointCloud.from_points(target, normals=normals)
+        return torchpcl.icp(
+            source,
+            case_target,
+            levels,
+            options=torchpcl.ICPOptions(objective=objective),
+        )
+
+    objectives = {
+        "point_to_point": torchpcl.PointToPoint(),
+        "point_to_plane": torchpcl.PointToPlane(),
+    }
+    for method, objective in objectives.items():
         result, seconds = timed(
-            lambda method=method: torchpcl.multiscale_icp(
-                source,
-                target,
-                scales,
-                method=method,
-                normal_k=args.normal_k,
-            ),
+            lambda objective=objective: run(objective),
             args.repeats,
             device=device,
         )

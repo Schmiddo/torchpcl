@@ -158,48 +158,61 @@ metrics.
 
 ## Registration
 
-Single-scale ICP accepts tensors or packed clouds. Results are always batched:
+ICP accepts tensors or packed clouds. A single-scale call contains one
+unvoxelized level:
 
 ```python
+target = tp.PointCloud.from_points(target_points, normals=target_normals)
 result = tp.icp(
     source,
     target,
-    max_distance=0.1,
-    method="point_to_plane",
-    target_normals=normals,
-    max_iterations=30,
+    levels=[
+        tp.ICPLevel(
+            max_correspondence_distance=0.1,
+            max_iterations=30,
+        ),
+    ],
+    options=tp.ICPOptions(objective=tp.PointToPlane()),
 )
 
-result.transforms      # (B, 4, 4), source-to-target
-result.converged       # (B,), bool
-result.iterations      # (B,), accumulated updates
-result.fitness         # (B,), inliers / source length
-result.inlier_rmse     # (B,)
+result.transforms       # (B, 4, 4), source-to-target
+result.converged        # (B,), final-level convergence
+result.iterations       # (B,), updates accumulated across levels
+result.fitness          # (B,), final-level inliers / source length
+result.inlier_rmse      # (B,), final-level RMSE
+result.level_results    # One diagnostic result per requested level
 ```
 
-Correspondences remain internal. Batch entries converge or fail independently,
-and failures retain their last valid transform.
+Point-to-plane requires normals attached to the target cloud. Estimate them
+explicitly with `estimate_normals` when they are not already available.
+Correspondences and neighbor indices remain internal.
 
-Use multi-scale ICP for larger initial misalignment:
+Multi-scale ICP uses the same function with several levels:
 
 ```python
-scales = [
-    tp.ICPScale(voxel_size=0.20, max_distance=0.40, iterations=30),
-    tp.ICPScale(voxel_size=0.10, max_distance=0.20, iterations=20),
-    tp.ICPScale(voxel_size=0.05, max_distance=0.10, iterations=15),
+levels = [
+    tp.ICPLevel(
+        voxel_size=0.20,
+        max_correspondence_distance=0.40,
+        max_iterations=30,
+    ),
+    tp.ICPLevel(
+        voxel_size=0.10,
+        max_correspondence_distance=0.20,
+        max_iterations=20,
+    ),
+    tp.ICPLevel(
+        voxel_size=None,
+        max_correspondence_distance=0.10,
+        max_iterations=15,
+    ),
 ]
-result = tp.multiscale_icp(source, target, scales, method="point_to_plane")
+result = tp.icp(source, target, levels)
 ```
 
-Reuse preprocessing by passing `PointCloudPyramid` objects directly:
-
-```python
-sizes = [scale.voxel_size for scale in scales]
-source_pyramid = tp.build_pyramid(source, sizes)
-target_pyramid = tp.build_pyramid(target, sizes, normal_mode="estimate")
-result = tp.multiscale_icp(source_pyramid, target_pyramid, scales,
-                           method="point_to_plane")
-```
+Every voxelized level is constructed from the original clouds.
+`voxel_size=None` uses the original clouds directly, which also allows a
+multi-scale schedule to finish at full resolution.
 
 `evaluate_registration` evaluates supplied transforms without iteration and
 returns `RegistrationMetrics`.
@@ -242,8 +255,8 @@ uv run python benchmarks/run_benchmark.py --task multiscale --repeats 5
 uv run python benchmarks/run_benchmark.py --task knn --knn-sizes 512 2048 8192
 ```
 
-The multi-scale benchmark is end-to-end: it includes voxel pyramids, automatic
-point-to-plane normals, neighbor indices, and all ICP levels. Configure its
+The multi-scale benchmark is end-to-end: it includes voxelization, explicit
+point-to-plane normal estimation, neighbor indices, and all ICP levels. Configure its
 schedule with `--multiscale-voxels`, `--multiscale-distances`, and
 `--multiscale-iterations`; all three lists must have the same length.
 

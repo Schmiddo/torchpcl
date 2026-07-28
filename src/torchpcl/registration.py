@@ -1,25 +1,123 @@
-"""Batched single-scale iterative closest point registration."""
+"""Batched single- and multi-level iterative closest point registration."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 import torch
 
 from ._segments import segment_sum
 from .alignment import _procrustes_packed
-from .cloud import (
-    PointCloud,
-    PointCloudLike,
-    _NormalizedCloud,
-    _normalize_cloud,
-    _pack_aligned,
-    batch_ids,
-)
+from .cloud import PointCloud, PointCloudLike, _normalize_cloud, batch_ids
 from .neighbors import NeighborIndex
 from .transforms import transform
-from .types import ICPResult, RegistrationMetrics
 from .validation import check_cloud_pair
+from .voxel import voxelize
+
+
+@dataclass(frozen=True, kw_only=True)
+class ICPLevel:
+    """Configuration for one ICP level."""
+
+    max_correspondence_distance: float
+    max_iterations: int = 30
+    voxel_size: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.max_correspondence_distance > 0:
+            raise ValueError("max_correspondence_distance must be positive")
+        if not isinstance(self.max_iterations, int) or self.max_iterations < 0:
+            raise ValueError("max_iterations must be a nonnegative integer")
+        if self.voxel_size is not None and not self.voxel_size > 0:
+            raise ValueError("voxel_size must be positive or None")
+
+
+@dataclass(frozen=True)
+class PointToPoint:
+    """Point-to-point ICP objective."""
+
+
+@dataclass(frozen=True)
+class PointToPlane:
+    """Point-to-plane ICP objective."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class HuberLoss:
+    """Huber residual weighting."""
+
+    delta: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.delta > 0:
+            raise ValueError("delta must be positive")
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConvergenceCriteria:
+    """Absolute fitness and RMSE change tolerances."""
+
+    fitness_tolerance: float = 1e-6
+    rmse_tolerance: float = 1e-6
+
+    def __post_init__(self) -> None:
+        if not self.fitness_tolerance >= 0:
+            raise ValueError("fitness_tolerance must be nonnegative")
+        if not self.rmse_tolerance >= 0:
+            raise ValueError("rmse_tolerance must be nonnegative")
+
+
+@dataclass(frozen=True, kw_only=True)
+class ICPOptions:
+    """Options shared by every level of an ICP call."""
+
+    objective: PointToPoint | PointToPlane = field(default_factory=PointToPoint)
+    convergence: ConvergenceCriteria = field(default_factory=ConvergenceCriteria)
+    robust_loss: HuberLoss | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.objective, (PointToPoint, PointToPlane)):
+            raise TypeError("objective must be PointToPoint or PointToPlane")
+        if not isinstance(self.convergence, ConvergenceCriteria):
+            raise TypeError("convergence must be ConvergenceCriteria")
+        if self.robust_loss is not None and not isinstance(
+            self.robust_loss, HuberLoss
+        ):
+            raise TypeError("robust_loss must be HuberLoss or None")
+
+
+@dataclass(frozen=True, eq=False)
+class RegistrationMetrics:
+    """Metrics for a batch of source-to-target transforms."""
+
+    transforms: torch.Tensor
+    fitness: torch.Tensor
+    inlier_rmse: torch.Tensor
+
+
+@dataclass(frozen=True, eq=False)
+class ICPLevelResult:
+    """Batched ICP output for one level."""
+
+    level: ICPLevel
+    transforms: torch.Tensor
+    converged: torch.Tensor
+    iterations: torch.Tensor
+    fitness: torch.Tensor
+    inlier_rmse: torch.Tensor
+
+
+@dataclass(frozen=True, eq=False)
+class ICPResult:
+    """Batched output from a complete ICP level sequence."""
+
+    transforms: torch.Tensor
+    converged: torch.Tensor
+    iterations: torch.Tensor
+    fitness: torch.Tensor
+    inlier_rmse: torch.Tensor
+    level_results: tuple[ICPLevelResult, ...]
 
 
 @dataclass(frozen=True, eq=False)
@@ -33,15 +131,23 @@ class _Evaluation:
     rmse: torch.Tensor
 
 
-def _prepare_inputs(
-    source: PointCloud,
-    target: PointCloud,
-    max_distance: float,
+@dataclass(frozen=True, eq=False)
+class _PreparedLevel:
+    config: ICPLevel
+    source: PointCloud
+    target: PointCloud
+    target_normals: torch.Tensor | None
+    index: NeighborIndex
+
+
+def _prepare_cloud_pair(
+    source: PointCloudLike,
+    target: PointCloudLike,
 ) -> tuple[PointCloud, PointCloud]:
-    check_cloud_pair(source, target, "source", "target", non_empty=True)
-    if max_distance <= 0:
-        raise ValueError("max_distance must be positive")
-    return source, target
+    source_cloud = _normalize_cloud(source, "source").cloud
+    target_cloud = _normalize_cloud(target, "target").cloud
+    check_cloud_pair(source_cloud, target_cloud, "source", "target", non_empty=True)
+    return source_cloud, target_cloud
 
 
 def _initial_transforms(
@@ -63,51 +169,69 @@ def _initial_transforms(
     return init.to(device=cloud.device, dtype=cloud.dtype).clone()
 
 
-def _target_normals(
-    target: _NormalizedCloud,
-    normals: torch.Tensor | None,
-    method: str,
-) -> torch.Tensor | None:
-    if normals is None:
-        normals = target.cloud.normals
+def _reduced_normals(
+    normals: torch.Tensor,
+    partition,
+) -> torch.Tensor:
+    reduced = partition.reduce(normals, reduction="mean")
+    norm = reduced.norm(dim=1, keepdim=True)
+    tiny = torch.finfo(reduced.dtype).tiny
+    valid = norm[:, 0] > tiny
+    return torch.where(valid[:, None], reduced / norm.clamp_min(tiny), 0)
+
+
+def _materialize_level(
+    source: PointCloud,
+    target: PointCloud,
+    config: ICPLevel,
+    objective: PointToPoint | PointToPlane,
+) -> _PreparedLevel:
+    if config.voxel_size is None:
+        source_level = source
+        target_level = target
     else:
-        normals = _pack_aligned(
-            normals, target, "target_normals", trailing_shape=(3,)
-        )
-    if method == "point_to_plane" and normals is None:
-        raise ValueError("point_to_plane requires target_normals")
-    if normals is None:
-        return None
-    if (
-        not isinstance(normals, torch.Tensor)
-        or normals.shape != target.cloud.points.shape
-    ):
-        raise ValueError("target_normals must have shape (P, 3)")
-    if (
-        normals.device != target.cloud.device
-        or normals.dtype != target.cloud.dtype
-    ):
-        raise ValueError("target_normals must match the target device and dtype")
-    return normals
+        source_level = voxelize(source, config.voxel_size).cloud
+        target_partition = voxelize(target, config.voxel_size)
+        target_level = target_partition.cloud
+        if isinstance(objective, PointToPlane):
+            assert target.normals is not None
+            normals = _reduced_normals(target.normals, target_partition)
+            target_level = PointCloud._from_validated(
+                target_level.points,
+                target_level.offsets,
+                normals=normals,
+            )
+
+    target_normals = (
+        target_level.normals if isinstance(objective, PointToPlane) else None
+    )
+    return _PreparedLevel(
+        config=config,
+        source=source_level,
+        target=target_level,
+        target_normals=target_normals,
+        index=NeighborIndex(target_level),
+    )
 
 
 def _evaluate(
-    source: PointCloud,
-    target: PointCloud,
-    index: NeighborIndex,
+    level: _PreparedLevel,
     transforms: torch.Tensor,
-    max_distance: float,
 ) -> _Evaluation:
-    current_cloud = transform(source, transforms)
+    current_cloud = transform(level.source, transforms)
     assert isinstance(current_cloud, PointCloud)
-    neighbors = index.hybrid(current_cloud, max_distance, 1)
+    neighbors = level.index.hybrid(
+        current_cloud,
+        level.config.max_correspondence_distance,
+        1,
+    )
     indices = neighbors.indices[:, 0]
     valid = neighbors.valid[:, 0]
-    target_points = target.points[indices.clamp(min=0)]
+    target_points = level.target.points[indices.clamp(min=0)]
     distances2 = neighbors.distances2[:, 0].masked_fill(~valid, 0)
-    counts = segment_sum(valid.to(source.dtype), source.offsets)
-    squared_error = segment_sum(distances2, source.offsets)
-    fitness = counts / source.lengths.to(source.dtype)
+    counts = segment_sum(valid.to(level.source.dtype), level.source.offsets)
+    squared_error = segment_sum(distances2, level.source.offsets)
+    fitness = counts / level.source.lengths.to(level.source.dtype)
     rmse = torch.where(
         counts > 0,
         (squared_error / counts.clamp(min=1)).sqrt(),
@@ -129,18 +253,17 @@ def _robust_weights(
     valid: torch.Tensor,
     active: torch.Tensor,
     ids: torch.Tensor,
-    robust_kernel: str | None,
-    robust_delta: float,
+    robust_loss: HuberLoss | None,
 ) -> torch.Tensor:
     weights = (valid & active[ids]).to(residual_magnitude.dtype)
-    if robust_kernel == "huber":
+    if robust_loss is not None:
         magnitude = residual_magnitude.clamp_min(
             torch.finfo(residual_magnitude.dtype).tiny
         )
         huber = torch.where(
-            residual_magnitude <= robust_delta,
+            residual_magnitude <= robust_loss.delta,
             torch.ones_like(magnitude),
-            robust_delta / magnitude,
+            robust_loss.delta / magnitude,
         )
         weights = weights * huber
     return weights
@@ -151,8 +274,7 @@ def _point_to_point_delta(
     active: torch.Tensor,
     ids: torch.Tensor,
     offsets: torch.Tensor,
-    robust_kernel: str | None,
-    robust_delta: float,
+    robust_loss: HuberLoss | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     residual = (evaluation.current - evaluation.target).norm(dim=1)
     weights = _robust_weights(
@@ -160,8 +282,7 @@ def _point_to_point_delta(
         evaluation.valid,
         active,
         ids,
-        robust_kernel,
-        robust_delta,
+        robust_loss,
     )
     alignment, _ = _procrustes_packed(
         evaluation.current,
@@ -184,8 +305,7 @@ def _point_to_plane_delta(
     active: torch.Tensor,
     ids: torch.Tensor,
     offsets: torch.Tensor,
-    robust_kernel: str | None,
-    robust_delta: float,
+    robust_loss: HuberLoss | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     matched_normals = normals[evaluation.indices.clamp(min=0)]
     residual = ((evaluation.current - evaluation.target) * matched_normals).sum(
@@ -196,8 +316,7 @@ def _point_to_plane_delta(
         evaluation.valid,
         active,
         ids,
-        robust_kernel,
-        robust_delta,
+        robust_loss,
     )
     jacobian = torch.cat(
         [torch.linalg.cross(evaluation.current, matched_normals), matched_normals],
@@ -246,97 +365,64 @@ def _poses_to_matrices(pose: torch.Tensor) -> torch.Tensor:
     return _rigid_matrices(rotation, pose[:, 3:])
 
 
-@torch.no_grad()
-def icp(
-    source: PointCloudLike,
-    target: PointCloudLike,
-    max_distance: float,
-    *,
-    init: torch.Tensor | None = None,
-    method: str = "point_to_point",
-    target_normals: torch.Tensor | None = None,
-    max_iterations: int = 30,
-    relative_fitness: float = 1e-6,
-    relative_rmse: float = 1e-6,
-    robust_kernel: str | None = None,
-    robust_delta: float = 1.0,
-    index: NeighborIndex | None = None,
-) -> ICPResult:
-    """Register packed source clouds to corresponding target clouds.
-
-    Each batch entry converges or fails independently. Failed entries retain
-    their last valid transform. Correspondences are internal and are not
-    returned or retained in the result.
-    """
-    normalized_source = _normalize_cloud(source, "source")
-    normalized_target = _normalize_cloud(target, "target")
-    source_cloud, target_cloud = _prepare_inputs(
-        normalized_source.cloud, normalized_target.cloud, max_distance
+def _run_level(
+    level: _PreparedLevel,
+    transforms: torch.Tensor,
+    options: ICPOptions,
+) -> ICPLevelResult:
+    source = level.source
+    source_ids = batch_ids(source.offsets, source.points.shape[0])
+    active = torch.ones(
+        source.batch_size,
+        dtype=torch.bool,
+        device=source.device,
     )
-    if method not in {"point_to_point", "point_to_plane"}:
-        raise ValueError("method must be 'point_to_point' or 'point_to_plane'")
-    if not isinstance(max_iterations, int) or max_iterations < 0:
-        raise ValueError("max_iterations must be a nonnegative integer")
-    if relative_fitness < 0 or relative_rmse < 0:
-        raise ValueError("convergence thresholds must be nonnegative")
-    if robust_kernel not in {None, "huber"}:
-        raise ValueError("robust_kernel must be None or 'huber'")
-    if robust_delta <= 0:
-        raise ValueError("robust_delta must be positive")
-    normals = _target_normals(normalized_target, target_normals, method)
-    transforms = _initial_transforms(source_cloud, init)
-    if index is None:
-        index = NeighborIndex(target_cloud)
-
-    batch_size = source_cloud.batch_size
-    source_ids = batch_ids(source_cloud.offsets, source_cloud.points.shape[0])
-    active = torch.ones(batch_size, dtype=torch.bool, device=source_cloud.device)
     converged = torch.zeros_like(active)
     iterations = torch.zeros(
-        batch_size, dtype=torch.int64, device=source_cloud.device
+        source.batch_size,
+        dtype=torch.int64,
+        device=source.device,
     )
     previous_fitness = torch.zeros(
-        batch_size, dtype=source_cloud.dtype, device=source_cloud.device
+        source.batch_size,
+        dtype=source.dtype,
+        device=source.device,
     )
     previous_rmse = torch.zeros_like(previous_fitness)
-    minimum = 3 if method == "point_to_point" else 6
+    minimum = 3 if isinstance(options.objective, PointToPoint) else 6
 
-    for iteration in range(max_iterations):
-        evaluation = _evaluate(
-            source_cloud,
-            target_cloud,
-            index,
-            transforms,
-            max_distance,
-        )
+    for iteration in range(level.config.max_iterations):
+        evaluation = _evaluate(level, transforms)
         active = active & (evaluation.counts >= minimum)
         if iteration > 0:
             stable = (
-                (evaluation.fitness - previous_fitness).abs() < relative_fitness
-            ) & ((evaluation.rmse - previous_rmse).abs() < relative_rmse)
+                (evaluation.fitness - previous_fitness).abs()
+                < options.convergence.fitness_tolerance
+            ) & (
+                (evaluation.rmse - previous_rmse).abs()
+                < options.convergence.rmse_tolerance
+            )
             newly_converged = active & stable
             converged = converged | newly_converged
             active = active & ~newly_converged
 
-        if method == "point_to_point":
+        if isinstance(options.objective, PointToPoint):
             delta, solvable = _point_to_point_delta(
                 evaluation,
                 active,
                 source_ids,
-                source_cloud.offsets,
-                robust_kernel,
-                robust_delta,
+                source.offsets,
+                options.robust_loss,
             )
         else:
-            assert normals is not None
+            assert level.target_normals is not None
             delta, solvable = _point_to_plane_delta(
                 evaluation,
-                normals,
+                level.target_normals,
                 active,
                 source_ids,
-                source_cloud.offsets,
-                robust_kernel,
-                robust_delta,
+                source.offsets,
+                options.robust_loss,
             )
         update = active & solvable
         candidate = delta @ transforms
@@ -345,20 +431,12 @@ def icp(
         active = update
         previous_fitness = evaluation.fitness
         previous_rmse = evaluation.rmse
-        # The scalar check synchronizes CUDA once per iteration, but avoids
-        # continuing expensive searches up to max_iterations after every batch
-        # entry has converged or failed.
         if not bool(active.any()):
             break
 
-    final = _evaluate(
-        source_cloud,
-        target_cloud,
-        index,
-        transforms,
-        max_distance,
-    )
-    return ICPResult(
+    final = _evaluate(level, transforms)
+    return ICPLevelResult(
+        level=level.config,
         transforms=transforms,
         converged=converged,
         iterations=iterations,
@@ -368,30 +446,82 @@ def icp(
 
 
 @torch.no_grad()
+def icp(
+    source: PointCloudLike,
+    target: PointCloudLike,
+    levels: Sequence[ICPLevel],
+    *,
+    init: torch.Tensor | None = None,
+    options: ICPOptions | None = None,
+) -> ICPResult:
+    """Register corresponding clouds through one or more ICP levels."""
+    level_configs = tuple(levels)
+    if not level_configs:
+        raise ValueError("levels must contain at least one ICPLevel")
+    if any(not isinstance(level, ICPLevel) for level in level_configs):
+        raise TypeError("levels must contain only ICPLevel instances")
+    if options is None:
+        options = ICPOptions()
+    elif not isinstance(options, ICPOptions):
+        raise TypeError("options must be ICPOptions or None")
+
+    source_cloud, target_cloud = _prepare_cloud_pair(source, target)
+    if isinstance(options.objective, PointToPlane) and target_cloud.normals is None:
+        raise ValueError("PointToPlane requires target normals")
+
+    transforms = _initial_transforms(source_cloud, init)
+    total_iterations = torch.zeros(
+        source_cloud.batch_size,
+        dtype=torch.int64,
+        device=source_cloud.device,
+    )
+    level_results = []
+    for config in level_configs:
+        prepared = _materialize_level(
+            source_cloud,
+            target_cloud,
+            config,
+            options.objective,
+        )
+        level_result = _run_level(prepared, transforms, options)
+        level_results.append(level_result)
+        transforms = level_result.transforms
+        total_iterations = total_iterations + level_result.iterations
+
+    final = level_results[-1]
+    return ICPResult(
+        transforms=final.transforms,
+        converged=final.converged,
+        iterations=total_iterations,
+        fitness=final.fitness,
+        inlier_rmse=final.inlier_rmse,
+        level_results=tuple(level_results),
+    )
+
+
+@torch.no_grad()
 def evaluate_registration(
     source: PointCloudLike,
     target: PointCloudLike,
-    max_distance: float,
+    max_correspondence_distance: float,
     transforms: torch.Tensor | None = None,
-    *,
-    index: NeighborIndex | None = None,
 ) -> RegistrationMetrics:
     """Evaluate source-to-target transforms without performing ICP updates."""
-    source_cloud, target_cloud = _prepare_inputs(
-        _normalize_cloud(source, "source").cloud,
-        _normalize_cloud(target, "target").cloud,
-        max_distance,
-    )
+    if not max_correspondence_distance > 0:
+        raise ValueError("max_correspondence_distance must be positive")
+    source_cloud, target_cloud = _prepare_cloud_pair(source, target)
     matrices = _initial_transforms(source_cloud, transforms)
-    if index is None:
-        index = NeighborIndex(target_cloud)
-    evaluation = _evaluate(
-        source_cloud,
-        target_cloud,
-        index,
-        matrices,
-        max_distance,
+    level = _PreparedLevel(
+        config=ICPLevel(
+            max_correspondence_distance=max_correspondence_distance,
+            max_iterations=0,
+        ),
+        source=source_cloud,
+        target=target_cloud,
+        target_normals=None,
+        index=NeighborIndex(target_cloud),
     )
+    evaluation = _evaluate(level, matrices)
     return RegistrationMetrics(
         transforms=matrices,
         fitness=evaluation.fitness,
@@ -399,4 +529,16 @@ def evaluate_registration(
     )
 
 
-__all__ = ["ICPResult", "RegistrationMetrics", "evaluate_registration", "icp"]
+__all__ = [
+    "ConvergenceCriteria",
+    "HuberLoss",
+    "ICPLevel",
+    "ICPLevelResult",
+    "ICPOptions",
+    "ICPResult",
+    "PointToPlane",
+    "PointToPoint",
+    "RegistrationMetrics",
+    "evaluate_registration",
+    "icp",
+]

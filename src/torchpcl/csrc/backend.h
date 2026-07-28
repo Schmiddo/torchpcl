@@ -11,6 +11,7 @@ namespace torchpcl {
 constexpr int64_t kMaxK = 64;
 
 using SearchResult = std::tuple<at::Tensor, at::Tensor>;
+using EigenResult = std::tuple<at::Tensor, at::Tensor>;
 
 class BvhImpl {
  public:
@@ -27,6 +28,7 @@ SearchResult packed_knn_cpu(
     const at::Tensor& query_batch_ids,
     int64_t k,
     double radius);
+EigenResult symmetric_eigh_3x3_cpu(const at::Tensor& matrices);
 
 #ifdef TORCHPCL_WITH_CUDA
 std::shared_ptr<BvhImpl> make_cuda_bvh(const at::Tensor& points);
@@ -37,6 +39,7 @@ SearchResult packed_knn_cuda(
     const at::Tensor& query_batch_ids,
     int64_t k,
     double radius);
+EigenResult symmetric_eigh_3x3_cuda(const at::Tensor& matrices);
 #endif
 
 class BvhIndex {
@@ -55,6 +58,7 @@ SearchResult packed_knn(
     const at::Tensor& query_batch_ids,
     int64_t k,
     double radius);
+EigenResult symmetric_eigh_3x3(const at::Tensor& matrices);
 
 bool has_cuda();
 

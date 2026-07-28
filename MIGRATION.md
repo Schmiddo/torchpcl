@@ -36,19 +36,23 @@ wrappers are not retained.
 
 ## ICP
 
-- Replace estimator objects with `method="point_to_point"` or
-  `method="point_to_plane"`.
-- Replace `ICPConvergenceCriteria` with direct `max_iterations`,
-  `relative_fitness`, and `relative_rmse` arguments.
+- Replace separate single- and multi-scale entry points with `icp` and a
+  nonempty sequence of `ICPLevel` objects.
+- Use one level with `voxel_size=None` for single-scale registration and
+  several levels for multi-scale registration.
+- Replace method strings with `PointToPoint()` or `PointToPlane()` in
+  `ICPOptions`.
+- Replace direct convergence arguments with `ConvergenceCriteria` and replace
+  robust-kernel strings with `HuberLoss`.
+- Attach point-to-plane normals to the target `PointCloud`. ICP does not
+  estimate them automatically.
 - Results are always batched. Use `result.transforms[0]` for an unbatched call.
-- `transformation` became `transforms`, and `num_iterations` became
-  `iterations`.
+- Total iterations and final-level metrics are available directly; inspect
+  `result.level_results` for per-level diagnostics.
 - Correspondences are no longer returned.
 - `evaluate_registration` returns `RegistrationMetrics`, not `ICPResult`.
-
-Multi-scale registration uses `ICPScale` and `multiscale_icp`. Reuse
-preprocessing with `build_pyramid` and pass `PointCloudPyramid` objects directly
-to subsequent calls.
+- Reusable registration pyramids and public neighbor-index parameters were
+  removed.
 
 ## Behavior Changes
 

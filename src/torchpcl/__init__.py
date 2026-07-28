@@ -9,7 +9,6 @@ from .metrics import (
     fscore,
     point_cloud_metrics,
 )
-from .multiscale import ICPScale, PointCloudPyramid, build_pyramid, multiscale_icp
 from .neighbors import (
     NeighborIndex,
     Neighbors,
@@ -18,37 +17,51 @@ from .neighbors import (
     radius_neighbors,
 )
 from .normals import NormalResult, estimate_normals
-from .registration import evaluate_registration, icp
-from .types import ICPResult, RegistrationMetrics
+from .registration import (
+    ConvergenceCriteria,
+    HuberLoss,
+    ICPLevel,
+    ICPLevelResult,
+    ICPOptions,
+    ICPResult,
+    PointToPlane,
+    PointToPoint,
+    RegistrationMetrics,
+    evaluate_registration,
+    icp,
+)
 from .transforms import transform
 from .voxel import Voxelization, voxelize
 
 __version__ = "0.2.0.dev0"
 
 __all__ = [
+    "ConvergenceCriteria",
     "FScoreResult",
+    "HuberLoss",
+    "ICPLevel",
+    "ICPLevelResult",
+    "ICPOptions",
     "ICPResult",
-    "ICPScale",
     "NeighborIndex",
     "Neighbors",
     "NormalResult",
     "PointCloud",
     "PointCloudLike",
     "PointCloudMetrics",
-    "PointCloudPyramid",
+    "PointToPlane",
+    "PointToPoint",
     "ProcrustesResult",
     "RegistrationMetrics",
     "Voxelization",
     "as_point_cloud",
     "chamfer_distance",
-    "build_pyramid",
     "estimate_normals",
     "evaluate_registration",
     "fscore",
     "hybrid_neighbors",
     "icp",
     "knn",
-    "multiscale_icp",
     "point_cloud_metrics",
     "procrustes",
     "radius_neighbors",

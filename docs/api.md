@@ -20,11 +20,6 @@ Construction and conversion helpers:
 - `cloud.to(device=None, dtype=None, non_blocking=False, copy=False)`
 - `cloud.clone()`
 
-### `PointCloudPyramid`
-
-Ordered tuple of packed clouds and matching voxel sizes. Build one with
-`build_pyramid` or pass a previously built pyramid to `multiscale_icp`.
-
 ## Geometry
 
 Public geometry inputs accept `(N, 3)` tensors, equal-length `(B, N, 3)` tensor
@@ -124,40 +119,53 @@ prediction-to-reference; completion is the reverse.
 ### `icp(...)`
 
 ```text
-icp(source, target, max_distance, *, init=None,
-    method="point_to_point", target_normals=None, max_iterations=30,
-    relative_fitness=1e-6, relative_rmse=1e-6,
-    robust_kernel=None, robust_delta=1.0, index=None) -> ICPResult
+icp(source, target, levels, *, init=None, options=None) -> ICPResult
 ```
 
-Methods are `"point_to_point"` and `"point_to_plane"`. The optional robust
-kernel is `"huber"`. `ICPResult` contains transforms, convergence flags,
-iteration counts, fitness, and inlier RMSE; it never contains correspondences.
+`levels` is a nonempty sequence of `ICPLevel` objects. Every level defines a
+maximum correspondence distance, an iteration budget, and an optional voxel
+size. `voxel_size=None` uses the original clouds. Other levels are voxelized
+independently from the original inputs and execute in the supplied order.
 
-### `evaluate_registration(source, target, max_distance, transforms=None, index=None)`
+`ICPOptions` selects a `PointToPoint` or `PointToPlane` objective, convergence
+tolerances, and an optional `HuberLoss`. Point-to-plane requires normals
+attached to the target `PointCloud`; ICP never estimates normals implicitly.
 
-Returns `RegistrationMetrics(transforms, fitness, inlier_rmse)` without ICP
-updates.
+The result contains final transforms, final-level convergence and metrics,
+total iteration counts, and a tuple of `ICPLevelResult` diagnostics. It never
+contains correspondences.
 
-### `build_pyramid(...)`
+Configuration example:
+
+```python
+levels = [
+    ICPLevel(
+        voxel_size=0.2,
+        max_correspondence_distance=0.4,
+        max_iterations=30,
+    ),
+    ICPLevel(
+        voxel_size=None,
+        max_correspondence_distance=0.1,
+        max_iterations=20,
+    ),
+]
+options = ICPOptions(
+    objective=PointToPlane(),
+    convergence=ConvergenceCriteria(
+        fitness_tolerance=1e-6,
+        rmse_tolerance=1e-6,
+    ),
+    robust_loss=HuberLoss(delta=0.02),
+)
+result = icp(source, target, levels, options=options)
+```
+
+### `evaluate_registration(...)`
 
 ```text
-build_pyramid(cloud, voxel_sizes, *, normal_mode="none", normal_k=30,
-              normal_radius_factor=2.5) -> PointCloudPyramid
+evaluate_registration(source, target, max_correspondence_distance,
+                      transforms=None) -> RegistrationMetrics
 ```
 
-`normal_mode` is `"none"`, `"reduce"`, or `"estimate"`.
-
-### `multiscale_icp(...)`
-
-```text
-multiscale_icp(source, target, scales, *, init=None,
-               method="point_to_point", target_normals=None,
-               normal_k=30, normal_radius_factor=2.5,
-               relative_fitness=1e-6, relative_rmse=1e-6,
-               robust_kernel=None, robust_delta=1.0) -> ICPResult
-```
-
-Each `ICPScale` defines voxel size, maximum correspondence distance, and
-iteration budget. Transforms flow from coarse to fine. Iterations are summed
-across levels; convergence and error metrics describe the final level.
+Returns transforms, fitness, and inlier RMSE without ICP updates.

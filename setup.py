@@ -1,4 +1,4 @@
-"""Build the private torchpcl search extension at installation time."""
+"""Build the private torchpcl native extension at installation time."""
 
 import os
 import sys
@@ -65,6 +65,7 @@ cpu_sources = [
     "src/torchpcl/csrc/bindings.cpp",
     "src/torchpcl/csrc/cpu/bvh.cpp",
     "src/torchpcl/csrc/cpu/packed_knn.cpp",
+    "src/torchpcl/csrc/cpu/symmetric_eigh.cpp",
 ]
 
 if cuda_enabled():
@@ -74,6 +75,7 @@ if cuda_enabled():
         + [
             "src/torchpcl/csrc/cuda/bvh.cu",
             "src/torchpcl/csrc/cuda/packed_knn.cu",
+            "src/torchpcl/csrc/cuda/symmetric_eigh.cu",
         ],
         include_dirs=include_dirs,
         define_macros=[("TORCHPCL_WITH_CUDA", "1")],

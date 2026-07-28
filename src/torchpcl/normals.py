@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from ._backend import symmetric_eigh_3x3 as _symmetric_eigh_3x3
 from .cloud import PointCloudLike, as_point_cloud
 from .neighbors import NeighborIndex
 
@@ -58,8 +59,7 @@ def estimate_normals(
     centered = (gathered - means[:, None]) * weights
     covariance = centered.transpose(1, 2) @ centered
 
-    eigenvalues, eigenvectors = torch.linalg.eigh(covariance)
-    normals = eigenvectors[:, :, 0]
+    eigenvalues, normals = _symmetric_eigh_3x3(covariance)
     normal_valid = counts >= 3
     normals = torch.where(normal_valid[:, None], normals, torch.zeros_like(normals))
 
