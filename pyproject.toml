@@ -44,6 +44,7 @@ dev = [
 benchmark = [
     "numpy>=2",
     "open3d; python_version < '3.13'",
+    "plyfile>=1.1.4",
     "small-gicp",
 ]
 

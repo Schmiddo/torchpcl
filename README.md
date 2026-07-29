@@ -250,16 +250,18 @@ uv sync --reinstall-package torchpcl
 ## Benchmarks
 
 ```bash
-uv run python benchmarks/run_benchmark.py --task all --repeats 5
-uv run python benchmarks/run_benchmark.py --task multiscale --repeats 5
-uv run python benchmarks/run_benchmark.py --task knn --knn-sizes 512 2048 8192
+uv run python benchmarks/run_benchmark.py --task all --device cpu --repeats 5
+uv run python benchmarks/run_benchmark.py --task registration --repeats 5
+uv run python benchmarks/run_benchmark.py --task search --search-sizes 512 2048 8192
+uv run python benchmarks/run_benchmark.py --task all --json results.json
 ```
 
-The multi-scale benchmark is end-to-end: it includes voxelization, explicit
-point-to-plane normal estimation, neighbor indices, and all ICP levels. Configure its
-schedule with `--multiscale-voxels`, `--multiscale-distances`, and
-`--multiscale-iterations`; all three lists must have the same length.
+The registration task contains alignment-only one-level cases and end-to-end
+multi-level cases. The latter include voxelization, explicit point-to-plane
+normal estimation, neighbor indices, and every ICP level. Configure the
+schedule with `--level-voxels`, `--level-distances`, and
+`--level-iterations`; all three lists must have the same length.
 
-Install the `benchmark` dependency group to add small_gicp and Open3D rows where
-their Python packages are available. Recorded baseline results are in
+Install the `benchmark` dependency group and pass `--comparisons` to add
+small_gicp and Open3D performance rows. Recorded baseline results are in
 [benchmarks/BASELINE.md](benchmarks/BASELINE.md).
