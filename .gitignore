@@ -1,4 +1,5 @@
 assets/
+results-*.json
 
 __pycache__
 data/
@@ -6,4 +7,3 @@ data/
 *.egg-info/
 build/
 dist/
-

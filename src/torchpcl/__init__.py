@@ -33,7 +33,7 @@ from .registration import (
 from .transforms import transform
 from .voxel import Voxelization, voxelize
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ConvergenceCriteria",
