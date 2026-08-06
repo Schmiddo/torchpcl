@@ -250,6 +250,37 @@ class PointCloud:
             None if self.features is None else self.features.clone(),
         )
 
+    def select_points(self, mask: torch.Tensor) -> PointCloud:
+        """Select packed point rows while preserving batch entries and attributes.
+
+        The boolean ``mask`` is aligned with packed point rows. Batch order and
+        batch size are unchanged, including entries for which no rows remain.
+        """
+        if not isinstance(mask, torch.Tensor):
+            raise TypeError(f"mask must be a torch.Tensor, got {type(mask).__name__}")
+        if mask.shape != (self.points.shape[0],):
+            raise ValueError(
+                f"mask must have shape ({self.points.shape[0]},), got {tuple(mask.shape)}"
+            )
+        if mask.dtype != torch.bool:
+            raise ValueError(f"mask must have dtype bool, got {mask.dtype}")
+        if mask.device != self.device:
+            raise ValueError("mask and points must be on the same device")
+
+        selected_prefix = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.int64, device=self.device),
+                mask.to(torch.int64).cumsum(0),
+            )
+        )
+        offsets = selected_prefix[self.offsets]
+        return self._from_validated(
+            self.points[mask],
+            offsets,
+            None if self.normals is None else self.normals[mask],
+            None if self.features is None else self.features[mask],
+        )
+
 
 PointCloudLike: TypeAlias = torch.Tensor | PointCloud
 

@@ -89,6 +89,20 @@ valid_normals = normal_result.valid    # false where < 3 neighbors were found
 curvature = normal_result.curvature    # smallest eigenvalue / eigenvalue sum
 ```
 
+Cleaning is mask-first so inspection and selection stay separate:
+
+```python
+outliers = tp.radius_outliers(
+    cloud,
+    radius=0.10,
+    min_neighbors=8,
+    include_self=False,
+)
+clean = cloud.select_points(~outliers)
+```
+
+`statistical_outliers` provides the corresponding per-cloud k-NN distance filter.
+
 ## Corresponding-Point Alignment
 
 Use differentiable Procrustes alignment when source and target rows are known

@@ -2,6 +2,10 @@
 
 from .alignment import ProcrustesResult, procrustes
 from .cloud import PointCloud, PointCloudLike, as_point_cloud
+from .filters import (
+    radius_outliers,
+    statistical_outliers,
+)
 from .metrics import (
     FScoreResult,
     PointCloudMetrics,
@@ -65,6 +69,8 @@ __all__ = [
     "point_cloud_metrics",
     "procrustes",
     "radius_neighbors",
+    "radius_outliers",
+    "statistical_outliers",
     "transform",
     "voxelize",
     "__version__",
