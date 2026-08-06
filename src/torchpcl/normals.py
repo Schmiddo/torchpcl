@@ -8,6 +8,7 @@ import torch
 
 from ._backend import symmetric_eigh_3x3 as _symmetric_eigh_3x3
 from .cloud import PointCloudLike, as_point_cloud
+from .local_geometry import _moments_from_neighbors
 from .neighbors import NeighborIndex
 
 
@@ -48,16 +49,7 @@ def estimate_normals(
     else:
         neighbors = index.hybrid(packed, radius, k)
 
-    indices = neighbors.indices
-    valid = neighbors.valid
-
-    counts = valid.sum(dim=1)
-    gathered = packed.points[indices.clamp(min=0)]
-    weights = valid.unsqueeze(-1).to(packed.dtype)
-    means = (gathered * weights).sum(dim=1)
-    means = means / counts.clamp(min=1).to(packed.dtype)[:, None]
-    centered = (gathered - means[:, None]) * weights
-    covariance = centered.transpose(1, 2) @ centered
+    _, covariance, counts = _moments_from_neighbors(packed.points, neighbors)
 
     eigenvalues, normals = _symmetric_eigh_3x3(covariance)
     normal_valid = counts >= 3

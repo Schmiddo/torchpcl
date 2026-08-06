@@ -70,6 +70,24 @@ sign-aligned to them; otherwise signs are arbitrary. The neighborhood includes
 the query point. Invalid normals are zero and identified by
 `NormalResult.valid`. This operation does not provide gradients.
 
+### `estimate_covariances(...)`
+
+```text
+estimate_covariances(cloud, radius=None, *, k=30, index=None, correction=1)
+    -> CovarianceResult
+```
+
+Returns packed `(P, 3)` neighborhood means, `(P, 3, 3)` covariance matrices,
+integer counts, and a validity mask. `radius=None` uses k-NN; a radius uses the
+existing bounded hybrid search. `correction=1` computes sample covariance and
+`correction=0` computes population covariance. Rows with fewer than three
+neighbors are invalid and have zero means and covariances.
+
+`covariance_from_neighbors(cloud, neighbors, correction=1)` reuses a
+fixed-width `Neighbors` result with one row per packed point. Neighborhood
+identity is discrete, while means and covariance entries retain gradients to
+the gathered coordinates.
+
 ## Search
 
 ### `NeighborIndex(reference, algorithm="auto")`
