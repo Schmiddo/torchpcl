@@ -75,6 +75,19 @@ sign-aligned to them; otherwise signs are arbitrary. The neighborhood includes
 the query point. Invalid normals are zero and identified by
 `NormalResult.valid`. This operation does not provide gradients.
 
+### Normal orientation
+
+```text
+orient_normals_toward_viewpoint(cloud, viewpoint, *, toward=True) -> PointCloud
+orient_normals_to_direction(cloud, direction, *, align=True) -> PointCloud
+```
+
+Both operations require a `PointCloud` with attached normals and return a new
+PointCloud. Viewpoints and directions may be shared `(3,)` tensors or per-cloud
+`(B, 3)` tensors with matching dtype and device. Viewpoint orientation leaves
+normals unchanged when a point coincides with the viewpoint; direction vectors
+must be nonzero.
+
 ### `estimate_covariances(...)`
 
 ```text

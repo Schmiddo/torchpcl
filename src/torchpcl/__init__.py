@@ -25,7 +25,12 @@ from .neighbors import (
     knn,
     radius_neighbors,
 )
-from .normals import NormalResult, estimate_normals
+from .normals import (
+    NormalResult,
+    estimate_normals,
+    orient_normals_to_direction,
+    orient_normals_toward_viewpoint,
+)
 from .registration import (
     ConvergenceCriteria,
     HuberLoss,
@@ -76,6 +81,8 @@ __all__ = [
     "knn",
     "point_cloud_metrics",
     "procrustes",
+    "orient_normals_to_direction",
+    "orient_normals_toward_viewpoint",
     "radius_neighbors",
     "radius_outliers",
     "statistical_outliers",

@@ -98,6 +98,18 @@ covariances = moments.covariances      # (P, 3, 3), sample covariance
 valid_moments = moments.valid          # false where < 3 neighbors were found
 ```
 
+Normal orientation is explicit and can use a shared or per-cloud viewpoint:
+
+```python
+cloud = PointCloud.from_points(downsampled.points, normal_result.normals)
+oriented_cloud = tp.orient_normals_toward_viewpoint(cloud, viewpoint)
+```
+
+Use `orient_normals_to_direction` when a known sensor or world direction is a
+better sign convention. These helpers never estimate normals or run graph
+propagation.
+
+
 Cleaning is mask-first so inspection and selection stay separate:
 
 ```python
