@@ -90,9 +90,10 @@ def voxelize(
     if voxel_size <= 0:
         raise ValueError("voxel_size must be positive")
 
-    point_batches = batch_ids(packed.offsets, packed.points.shape[0])
-    spatial = torch.floor(packed.points / voxel_size).to(torch.int64)
+    point_batches = batch_ids(packed.offsets, packed.points.shape[0]).to(torch.int32)
+    spatial = torch.floor(packed.points / voxel_size).to(torch.int32)
     point_coordinates = torch.cat([point_batches[:, None], spatial], dim=1)
+    del point_batches, spatial
 
     # torch.unique(dim=0) compares rows through a particularly slow CPU path.
     # Four stable scalar sorts give the same lexicographic order while keeping
