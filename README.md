@@ -89,6 +89,15 @@ valid_normals = normal_result.valid    # false where < 3 neighbors were found
 curvature = normal_result.curvature    # smallest eigenvalue / eigenvalue sum
 ```
 
+The same bounded neighborhoods can produce differentiable local moments:
+
+```python
+moments = tp.estimate_covariances(downsampled, radius=0.15, k=30)
+means = moments.means                  # (P, 3)
+covariances = moments.covariances      # (P, 3, 3), sample covariance
+valid_moments = moments.valid          # false where < 3 neighbors were found
+```
+
 Cleaning is mask-first so inspection and selection stay separate:
 
 ```python

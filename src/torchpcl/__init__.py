@@ -6,6 +6,11 @@ from .filters import (
     radius_outliers,
     statistical_outliers,
 )
+from .local_geometry import (
+    CovarianceResult,
+    covariance_from_neighbors,
+    estimate_covariances,
+)
 from .metrics import (
     FScoreResult,
     PointCloudMetrics,
@@ -41,6 +46,7 @@ __version__ = "0.2.0"
 
 __all__ = [
     "ConvergenceCriteria",
+    "CovarianceResult",
     "FScoreResult",
     "HuberLoss",
     "ICPLevel",
@@ -60,6 +66,8 @@ __all__ = [
     "Voxelization",
     "as_point_cloud",
     "chamfer_distance",
+    "covariance_from_neighbors",
+    "estimate_covariances",
     "estimate_normals",
     "evaluate_registration",
     "fscore",
