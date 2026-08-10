@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TypeAlias
 
@@ -333,6 +334,71 @@ def as_point_cloud(value: PointCloudLike, name: str = "value") -> PointCloud:
     return _normalize_cloud(value, name).cloud
 
 
+def _offsets_from_lengths(lengths: torch.Tensor) -> torch.Tensor:
+    return torch.cat((lengths.new_zeros(1), lengths.cumsum(0)))
+
+
+def cat(clouds: list[PointCloud]) -> PointCloud:
+    """Concatenate corresponding batch entries along the point dimension.
+
+    All inputs must have the same batch size. Within each result batch entry,
+    points from the input clouds occur in input-list order. Attached normals
+    and features are concatenated in the same order.
+    """
+    if len(clouds) == 0:
+        raise ValueError("input must not be empty")
+    first = clouds[0]
+    if any(cloud.batch_size != first.batch_size for cloud in clouds[1:]):
+        raise ValueError("all clouds must have the same batch size for cat")
+    if len(clouds) == 1:
+        return first
+
+    lengths = torch.stack([cloud.lengths for cloud in clouds]).sum(0)
+    offsets = _offsets_from_lengths(lengths)
+
+    def concatenate_batches(attribute: str) -> torch.Tensor:
+        values = [getattr(cloud, attribute) for cloud in clouds]
+        chunks = [
+            value[cloud.offsets[batch] : cloud.offsets[batch + 1]]
+            for batch in range(first.batch_size)
+            for cloud, value in zip(clouds, values, strict=True)
+        ]
+        # A zero-batch cloud has no chunks, but each validated value still
+        # carries the correct trailing shape, dtype, and device.
+        return torch.cat(chunks if chunks else values)
+
+    points = concatenate_batches("points")
+    normals = None if first.normals is None else concatenate_batches("normals")
+    features = (
+        None if first.features is None else concatenate_batches("features")
+    )
+    return PointCloud._from_validated(points, offsets, normals, features)
+
+
+def cat_batch(clouds: list[PointCloud]) -> PointCloud:
+    """Concatenate point clouds along the logical batch dimension.
+
+    Complete batch entries are appended in input-list order. Attached normals
+    and features must have compatible presence, dtype, and shape.
+    """
+    if len(clouds) == 0:
+        raise ValueError("input must not be empty")
+    first = clouds[0]
+    if len(clouds) == 1:
+        return first
+
+    points = torch.cat([cloud.points for cloud in clouds])
+    lengths = torch.cat([cloud.lengths for cloud in clouds])
+    offsets = _offsets_from_lengths(lengths)
+    normals = None if first.normals is None else torch.cat(
+        [cloud.normals for cloud in clouds]
+    )
+    features = None if first.features is None else torch.cat(
+        [cloud.features for cloud in clouds]
+    )
+    return PointCloud._from_validated(points, offsets, normals, features)
+
+
 def _pack_aligned(
     values: torch.Tensor,
     normalized: _NormalizedCloud,
@@ -393,4 +459,4 @@ def batch_ids(offsets: torch.Tensor, total_size: int) -> torch.Tensor:
     )
 
 
-__all__ = ["PointCloud", "PointCloudLike", "as_point_cloud"]
+__all__ = ["PointCloud", "PointCloudLike", "as_point_cloud", "cat", "cat_batch"]

@@ -1,7 +1,7 @@
 """Point cloud registration and processing built on torch and cuBQL."""
 
 from .alignment import ProcrustesResult, procrustes
-from .cloud import PointCloud, PointCloudLike, as_point_cloud
+from .cloud import PointCloud, PointCloudLike, as_point_cloud, cat, cat_batch
 from .filters import (
     radius_outliers,
     statistical_outliers,
@@ -70,6 +70,8 @@ __all__ = [
     "RegistrationMetrics",
     "Voxelization",
     "as_point_cloud",
+    "cat",
+    "cat_batch",
     "chamfer_distance",
     "covariance_from_neighbors",
     "estimate_covariances",

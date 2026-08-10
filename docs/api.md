@@ -20,6 +20,8 @@ Construction and conversion helpers:
 - `cloud.to(device=None, dtype=None, non_blocking=False, copy=False)`
 - `cloud.clone()`
 - `cloud.select_points(mask)`
+- `cat(clouds)` concatenates corresponding batches along the point dimension
+- `cat_batch(clouds)` appends complete batch entries
 
 `select_points` accepts a packed `(P,)` boolean mask and retains the batch
 count and order, attached normals and features, and ordinary gradients through
