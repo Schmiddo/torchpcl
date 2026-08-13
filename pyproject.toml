@@ -11,12 +11,12 @@ license-files = [
 ]
 dependencies = [
     "torch>=2.10.0",
+    "numpy>=2",
+    "plyfile>=1.1.4",
 ]
 
 [project.optional-dependencies]
 tools = [
-    "numpy>=2",
-    "plyfile>=1.1.4",
     "trimesh>=4.6",
 ]
 
@@ -38,13 +38,10 @@ where = ["src"]
 
 [dependency-groups]
 dev = [
-    "numpy>=2",
     "pytest>=8",
 ]
 benchmark = [
-    "numpy>=2",
     "open3d; python_version < '3.13'",
-    "plyfile>=1.1.4",
     "small-gicp",
 ]
 

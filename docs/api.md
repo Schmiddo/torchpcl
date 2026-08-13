@@ -27,6 +27,18 @@ Construction and conversion helpers:
 count and order, attached normals and features, and ordinary gradients through
 the selected tensors. Batch entries may become empty.
 
+### PLY I/O
+
+`torchpcl.io.load(path)` loads one PLY vertex cloud. The `x`, `y`, and `z`
+properties are required; complete `nx`/`ny`/`nz` normals are preserved when present.
+The geometry output dtype can be selected with `dtype=torch.float32` or
+`dtype=torch.float64`.
+
+`torchpcl.io.save(path, cloud)` saves one tensor or one-entry `PointCloud` as binary
+PLY. Additional scalar vertex properties can be mapped to the `PointCloud.features`
+tensor by passing the same ordered sequence of strings to `features` on load and save.
+The equivalent `load_ply` and `save_ply` names are also exported from `torchpcl`.
+
 ## Geometry
 
 Public geometry inputs accept `(N, 3)` tensors, equal-length `(B, N, 3)` tensor

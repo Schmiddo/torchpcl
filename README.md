@@ -38,8 +38,8 @@ installing from a Git checkout, initialize the submodule first:
 git submodule update --init third_party/cuBQL
 ```
 
-NumPy, plyfile, and Trimesh are only needed by the repository's file-processing
-tools and optimization example. Install them with:
+Trimesh is only needed for the repository's file-processing tools, and the
+optimization example. Install all tools with:
 
 ```bash
 pip install --no-build-isolation ".[tools]"

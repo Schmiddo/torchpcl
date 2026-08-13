@@ -6,6 +6,7 @@ from .filters import (
     radius_outliers,
     statistical_outliers,
 )
+from .io import load_ply, save_ply
 from .local_geometry import (
     CovarianceResult,
     covariance_from_neighbors,
@@ -81,12 +82,14 @@ __all__ = [
     "hybrid_neighbors",
     "icp",
     "knn",
+    "load_ply",
     "point_cloud_metrics",
     "procrustes",
     "orient_normals_to_direction",
     "orient_normals_toward_viewpoint",
     "radius_neighbors",
     "radius_outliers",
+    "save_ply",
     "statistical_outliers",
     "transform",
     "voxelize",
