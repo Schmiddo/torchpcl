@@ -93,13 +93,15 @@ class CudaBvh final : public BvhImpl {
         reinterpret_cast<const cuBQL::box3f*>(boxes.data_ptr<float>()),
         static_cast<uint32_t>(count),
         cuBQL::BuildConfig{},
-        stream);
+        stream,
+        memory_resource_);
   }
 
   ~CudaBvh() override {
     try {
       const c10::cuda::CUDAGuard guard(device_);
-      cuBQL::cuda::free(bvh_, at::cuda::getCurrentCUDAStream());
+      cuBQL::cuda::free(
+          bvh_, at::cuda::getCurrentCUDAStream(), memory_resource_);
     } catch (...) {
     }
   }
@@ -147,6 +149,7 @@ class CudaBvh final : public BvhImpl {
 
  private:
   at::Tensor points_;
+  cuBQL::DeviceMemoryResource memory_resource_;
   cuBQL::bvh3f bvh_{};
   c10::DeviceIndex device_;
 };
