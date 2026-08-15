@@ -69,7 +69,7 @@ def check_point_attribute(
         requirement = f"shape {expected}" if exact_shape else f"leading dimension {points.shape[0]}"
         raise ValueError(f"{name} must have {requirement}, got {tuple(values.shape)}")
     if values.device != points.device:
-        raise ValueError(f"{name} and points must be on the same device")
+        raise ValueError(f"{name} and points must be on the same device, got {values.device} and {points.device}")
 
 
 def check_cloud_pair(
@@ -84,11 +84,11 @@ def check_cloud_pair(
     """Validate properties shared by paired-cloud public operations."""
     names = f"{first_name} and {second_name}"
     if first.batch_size != second.batch_size:
-        raise ValueError(f"{names} must have the same batch size")
+        raise ValueError(f"{names} must have the same batch size, got {first.batch_size} and {second.batch_size}")
     if first.device != second.device:
-        raise ValueError(f"{names} must be on the same device")
+        raise ValueError(f"{names} must be on the same device, got {first.device} and {second.device}")
     if first.dtype != second.dtype:
-        raise ValueError(f"{names} must have the same dtype")
+        raise ValueError(f"{names} must have the same dtype, got {first.dtype} and {second.dtype}")
     if equal_lengths and not bool(torch.equal(first.lengths, second.lengths)):
         raise ValueError(f"{names} batch entries must have equal lengths")
     if non_empty and bool(torch.any((first.lengths == 0) | (second.lengths == 0))):
