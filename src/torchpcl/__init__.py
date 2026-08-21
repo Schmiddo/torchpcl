@@ -6,6 +6,14 @@ from .filters import (
     radius_outliers,
     statistical_outliers,
 )
+from .feature_matching import CorrespondenceSet, match_features
+from .features import FPFHResult, fpfh
+from .global_registration import (
+    FGROptions,
+    FGRResult,
+    fast_global_registration,
+    fast_global_registration_from_correspondences,
+)
 from .io import load_ply, save_ply
 from .local_geometry import (
     CovarianceResult,
@@ -52,7 +60,11 @@ __version__ = "0.2.0"
 
 __all__ = [
     "ConvergenceCriteria",
+    "CorrespondenceSet",
     "CovarianceResult",
+    "FGROptions",
+    "FGRResult",
+    "FPFHResult",
     "FScoreResult",
     "HuberLoss",
     "ICPLevel",
@@ -78,11 +90,15 @@ __all__ = [
     "estimate_covariances",
     "estimate_normals",
     "evaluate_registration",
+    "fast_global_registration",
+    "fast_global_registration_from_correspondences",
+    "fpfh",
     "fscore",
     "hybrid_neighbors",
     "icp",
     "knn",
     "load_ply",
+    "match_features",
     "point_cloud_metrics",
     "procrustes",
     "orient_normals_to_direction",

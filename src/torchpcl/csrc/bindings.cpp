@@ -62,6 +62,25 @@ SearchResult packed_knn(
   TORCH_CHECK(false, "unsupported points device: ", points.device());
 }
 
+SearchResult feature_knn1(
+    const at::Tensor& reference, const at::Tensor& queries) {
+  check_feature_pair(reference, queries);
+  if (reference.device().is_cpu()) {
+    return feature_knn1_cpu(reference, queries);
+  }
+  if (reference.is_cuda()) {
+#ifdef TORCHPCL_WITH_CUDA
+    return feature_knn1_cuda(reference, queries);
+#else
+    TORCH_CHECK(
+        false,
+        "torchpcl was built without CUDA support; reinstall with "
+        "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit");
+#endif
+  }
+  TORCH_CHECK(false, "unsupported feature device: ", reference.device());
+}
+
 EigenResult symmetric_eigh_3x3(const at::Tensor& matrices) {
   TORCH_CHECK(
       matrices.scalar_type() == at::kFloat ||
@@ -103,6 +122,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       .def(py::init<const at::Tensor&>())
       .def("knn", &torchpcl::BvhIndex::knn);
   module.def("packed_knn", &torchpcl::packed_knn);
+  module.def("feature_knn1", &torchpcl::feature_knn1);
   module.def("symmetric_eigh_3x3", &torchpcl::symmetric_eigh_3x3);
   module.def("has_cuda", &torchpcl::has_cuda);
 }

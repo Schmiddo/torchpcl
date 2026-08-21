@@ -161,6 +161,29 @@ NaN, and rows without scores are outliers.
 
 Both outlier functions run without gradient tracking and return packed outlier masks.
 
+## Features
+
+### `fpfh(...)`
+
+```text
+fpfh(cloud, radius, *, max_neighbors=64) -> FPFHResult
+```
+
+Computes point-aligned 33-value fast point feature histograms from a
+`PointCloud` with attached, consistently oriented normals. The result contains
+`descriptors`, a per-row `valid` mask, and `neighbor_limit_reached`, which
+signals that the bounded search filled all available slots. Invalid descriptor
+rows are zero. This inference-only implementation supports at most 64 neighbors.
+
+For feature matching, select valid rows before attaching the descriptors:
+
+```python
+features = fpfh(cloud, radius=0.25)
+cloud = cloud.select_points(features.valid).with_features(
+    features.descriptors[features.valid]
+)
+```
+
 ## Metrics
 
 ### `chamfer_distance(...)`
@@ -187,6 +210,32 @@ and F-score. Every field retains its `(B,)` batch dimension. Accuracy is
 prediction-to-reference; completion is the reverse.
 
 ## Registration
+
+### Feature matching and fast global registration
+
+```text
+match_features(source, target, *, mutual=True) -> CorrespondenceSet
+fast_global_registration(source, target, *, options) -> FGRResult
+fast_global_registration_from_correspondences(
+    source, target, correspondences, *, options
+) -> FGRResult
+```
+
+`match_features` uses exact squared-L2 matching over point-aligned
+`PointCloud.features`. `CorrespondenceSet` stores source and target point-row
+indices plus optional squared descriptor distances.
+
+The current FGR prototype supports one source/target cloud pair. The
+feature-driven entry point performs mutual matching and delegates to the
+correspondence-driven solver. `FGROptions` requires
+`max_correspondence_distance` and provides an iteration budget plus optional
+tuple filtering. Results contain batch-shaped source-to-target transforms,
+success flags, iteration and correspondence counts, fitness, and inlier RMSE.
+Success means a finite optimization completed; fitness and RMSE determine
+whether the alignment is useful.
+
+See `examples/global_registration.py` for the complete normals, FPFH, FGR, and
+ICP workflow.
 
 ### `icp(...)`
 

@@ -30,6 +30,16 @@ def symmetric_eigh_3x3(
     return _C.symmetric_eigh_3x3(matrices.contiguous())
 
 
+def feature_knn1(
+    reference: torch.Tensor, queries: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the exact nearest feature row and squared distance per query."""
+    _check_device(reference.device)
+    return _C.feature_knn1(
+        reference.detach().contiguous(), queries.detach().contiguous()
+    )
+
+
 class BvhBackend:
     def __init__(self, reference: PointCloud) -> None:
         _check_device(reference.device)
@@ -81,4 +91,4 @@ class PackedBackend:
         )
 
 
-__all__ = ["BvhBackend", "PackedBackend", "symmetric_eigh_3x3"]
+__all__ = ["BvhBackend", "PackedBackend", "feature_knn1", "symmetric_eigh_3x3"]

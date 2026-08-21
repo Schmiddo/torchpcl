@@ -252,6 +252,35 @@ multi-scale schedule to finish at full resolution.
 `evaluate_registration` evaluates supplied transforms without iteration and
 returns `RegistrationMetrics`.
 
+### PLY registration tool
+
+The `torchpcl.tools.register` tool aligns a source PLY to a target PLY.
+By default it downsamples both clouds, computes oriented normals and FPFH,
+runs fast global registration, and refines the result with point-to-point ICP:
+
+```bash
+uv run -m torchpcl.tools.register source.ply target.ply \
+    --voxel-size 0.02 \
+    --output combined.ply
+```
+
+It prints the final source-to-target matrix, fitness, and inlier RMSE. The
+optional output contains the transformed source followed by the target and
+preserves standard PLY `red`, `green`, and `blue` vertex colors. If only one
+input is colored, its values remain untouched. Uncolored source points are
+written in red and uncolored target points in blue. The normal, feature, FGR,
+and ICP radii default to multiples of `--voxel-size` and can be overridden
+independently; choose a voxel size appropriate for the units and sampling
+density of the input clouds.
+
+Use `--no-global-registration` for ICP from identity, or
+`--icp-objective point-to-plane` to use target normals (estimating them when
+the PLY does not contain normals). The equivalent module invocation is:
+
+```bash
+python -m torchpcl.tools.register source.ply target.ply
+```
+
 ## Behavior
 
 - Geometry supports float32 and float64 on CPU and CUDA.

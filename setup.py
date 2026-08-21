@@ -64,6 +64,7 @@ include_dirs = [str(CSRC), str(cubql_root)]
 cpu_sources = [
     "src/torchpcl/csrc/bindings.cpp",
     "src/torchpcl/csrc/cpu/bvh.cpp",
+    "src/torchpcl/csrc/cpu/feature_knn.cpp",
     "src/torchpcl/csrc/cpu/packed_knn.cpp",
     "src/torchpcl/csrc/cpu/symmetric_eigh.cpp",
 ]
@@ -74,6 +75,7 @@ if cuda_enabled():
         cpu_sources
         + [
             "src/torchpcl/csrc/cuda/bvh.cu",
+            "src/torchpcl/csrc/cuda/feature_knn.cu",
             "src/torchpcl/csrc/cuda/packed_knn.cu",
             "src/torchpcl/csrc/cuda/symmetric_eigh.cu",
         ],

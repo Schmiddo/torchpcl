@@ -18,6 +18,27 @@ inline void check_points(const at::Tensor& tensor, const char* name) {
       " must have shape (N, 3)");
 }
 
+inline void check_feature_pair(
+    const at::Tensor& reference, const at::Tensor& queries) {
+  TORCH_CHECK(
+      reference.scalar_type() == at::kFloat ||
+          reference.scalar_type() == at::kDouble,
+      "features must have dtype float32 or float64");
+  TORCH_CHECK(
+      reference.scalar_type() == queries.scalar_type(),
+      "reference and query features must have the same dtype");
+  TORCH_CHECK(
+      reference.device() == queries.device(),
+      "reference and query features must be on the same device");
+  TORCH_CHECK(
+      reference.is_contiguous() && queries.is_contiguous(),
+      "feature tensors must be contiguous");
+  TORCH_CHECK(
+      reference.dim() == 2 && queries.dim() == 2 &&
+          reference.size(1) == queries.size(1),
+      "feature tensors must have shape (N, D) with matching D");
+}
+
 inline void check_knn_args(int64_t k, double radius) {
   TORCH_CHECK(k >= 1 && k <= kMaxK, "k must be in [1, ", kMaxK, "]");
   TORCH_CHECK(radius > 0.0 && !std::isnan(radius), "radius must be positive");
