@@ -23,7 +23,7 @@ def radius_outliers(
         raise ValueError("radius must be finite and positive")
 
     packed = as_point_cloud(cloud)
-    index = NeighborIndex(packed, algorithm="bruteforce")
+    index = NeighborIndex(packed)
     neighbors = index.hybrid(packed, radius, k)
     radius_valid = neighbors.valid & (neighbors.distances2 <= radius * radius)
     counts = radius_valid.sum(dim=1)
