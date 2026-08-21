@@ -129,3 +129,33 @@ def test_cuda_backend_uses_current_stream():
     assert (marker >= 0).all()
     assert (eigenvalue_marker == 1).all()
     assert (eigenvector_marker.norm(dim=-1) == 1).all()
+
+
+@pytest.mark.skipif(
+    not (_C.has_cuda() and torch.cuda.device_count() >= 2),
+    reason="multiple CUDA devices unavailable",
+)
+def test_cuda_bvh_allocations_follow_points_device():
+    points_device = torch.device("cuda", 1)
+    caller_device = torch.device("cuda", 0)
+    generator = torch.Generator(device="cpu").manual_seed(17)
+    points = torch.rand(37, 3, generator=generator).to(points_device)
+    queries = torch.rand(9, 3, generator=generator).to(points_device)
+
+    with torch.cuda.device(caller_device):
+        indices, distances = _C.BvhIndex(points).knn(
+            queries, 5, math.inf
+        )
+        assert torch.cuda.current_device() == caller_device.index
+
+    expected = torch.cdist(queries, points).square().topk(
+        5, dim=1, largest=False
+    ).values
+    assert indices.device == points_device
+    assert distances.device == points_device
+    torch.testing.assert_close(
+        _selected_distances(points, queries, indices),
+        expected,
+        atol=1e-6,
+        rtol=1e-5,
+    )

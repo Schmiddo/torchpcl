@@ -20,6 +20,30 @@ namespace {
 
 constexpr int kBlock = 256;
 
+class DeviceAsyncMemoryResource final : public cuBQL::GpuMemoryResource {
+ public:
+  explicit DeviceAsyncMemoryResource(c10::DeviceIndex device)
+      : device_(device) {
+    const c10::cuda::CUDAGuard guard(device_);
+    C10_CUDA_CHECK(cudaDeviceGetDefaultMemPool(&memory_pool_, device_));
+  }
+
+  void malloc(void** ptr, size_t size, cudaStream_t stream) override {
+    const c10::cuda::CUDAGuard guard(device_);
+    C10_CUDA_CHECK(
+        cudaMallocFromPoolAsync(ptr, size, memory_pool_, stream));
+  }
+
+  void free(void* ptr, cudaStream_t stream) override {
+    const c10::cuda::CUDAGuard guard(device_);
+    C10_CUDA_CHECK(cudaFreeAsync(ptr, stream));
+  }
+
+ private:
+  c10::DeviceIndex device_;
+  cudaMemPool_t memory_pool_{};
+};
+
 __global__ void make_boxes(
     cuBQL::box3f* boxes, const cuBQL::vec3f* points, int count) {
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -76,7 +100,9 @@ __global__ void knn_query(
 class CudaBvh final : public BvhImpl {
  public:
   explicit CudaBvh(const at::Tensor& points)
-      : points_(points), device_(points.get_device()) {
+      : points_(points),
+        device_(points.get_device()),
+        memory_resource_(device_) {
     TORCH_CHECK(points_.is_cuda(), "points must be a CUDA tensor");
     const c10::cuda::CUDAGuard guard(device_);
     const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -149,9 +175,9 @@ class CudaBvh final : public BvhImpl {
 
  private:
   at::Tensor points_;
-  cuBQL::DeviceMemoryResource memory_resource_;
-  cuBQL::bvh3f bvh_{};
   c10::DeviceIndex device_;
+  DeviceAsyncMemoryResource memory_resource_;
+  cuBQL::bvh3f bvh_{};
 };
 
 }  // namespace
