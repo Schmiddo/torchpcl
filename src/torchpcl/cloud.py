@@ -251,6 +251,24 @@ class PointCloud:
             None if self.features is None else self.features.clone(),
         )
 
+    def with_normals(self, normals: torch.Tensor | None) -> PointCloud:
+        """Return this cloud with a replacement point-aligned normal tensor."""
+        return PointCloud(
+            self.points,
+            self.offsets,
+            normals=normals,
+            features=self.features,
+        )
+
+    def with_features(self, features: torch.Tensor | None) -> PointCloud:
+        """Return this cloud with replacement point-aligned features."""
+        return PointCloud(
+            self.points,
+            self.offsets,
+            normals=self.normals,
+            features=features,
+        )
+
     def select_points(self, mask: torch.Tensor) -> PointCloud:
         """Select packed point rows while preserving batch entries and attributes.
 

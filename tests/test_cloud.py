@@ -80,6 +80,22 @@ def test_clone_has_independent_storage(device):
     assert cloned.features.data_ptr() != cloud.features.data_ptr()
 
 
+def test_with_normals_and_features_replace_only_requested_attribute(device):
+    points = torch.randn(4, 3, dtype=torch.float64, device=device)
+    cloud = tp.PointCloud.from_points(points)
+    normals = torch.randn_like(points)
+    features = torch.randn(4, 5, device=device)
+
+    with_normals = cloud.with_normals(normals)
+    described = with_normals.with_features(features)
+
+    assert with_normals.points is points
+    assert with_normals.normals is normals
+    assert described.points is points
+    assert described.normals is normals
+    assert described.features is features
+
+
 @pytest.mark.parametrize(
     "offsets",
     [

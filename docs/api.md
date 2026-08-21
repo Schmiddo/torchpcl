@@ -19,6 +19,8 @@ Construction and conversion helpers:
 - `cloud.to_padded(pad_value=0)`
 - `cloud.to(device=None, dtype=None, non_blocking=False, copy=False)`
 - `cloud.clone()`
+- `cloud.with_normals(normals)`
+- `cloud.with_features(features)`
 - `cloud.select_points(mask)`
 - `cat(clouds)` concatenates corresponding batches along the point dimension
 - `cat_batch(clouds)` appends complete batch entries
