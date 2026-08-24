@@ -67,6 +67,54 @@ def test_packed_one_shot_radius_and_hybrid():
     assert torch.equal(radius.valid, hybrid.valid)
 
 
+@pytest.mark.parametrize("algorithm", ["bvh", "bruteforce"])
+def test_radius_boundary_is_inclusive(search_device, algorithm):
+    dtype = torch.float64
+    query = torch.zeros(1, 3, dtype=dtype, device=search_device)
+    boundary_only = torch.tensor(
+        [[1.0, 0.0, 0.0]], dtype=dtype, device=search_device
+    )
+    single = tp.radius_neighbors(
+        boundary_only,
+        query,
+        1.0,
+        max_neighbors=1,
+        algorithm=algorithm,
+    )
+    next_float32 = torch.nextafter(
+        torch.tensor(1.0, dtype=torch.float32),
+        torch.tensor(torch.inf, dtype=torch.float32),
+    ).item()
+    slightly_outside = torch.tensor(
+        [[(1.0 + next_float32) / 2, 0.0, 0.0]],
+        dtype=dtype,
+        device=search_device,
+    )
+    outside = tp.radius_neighbors(
+        slightly_outside,
+        query,
+        1.0,
+        max_neighbors=1,
+        algorithm=algorithm,
+    )
+
+    with_self = torch.cat((query, boundary_only))
+    pair = tp.hybrid_neighbors(
+        with_self,
+        query,
+        1.0,
+        2,
+        algorithm=algorithm,
+    )
+
+    assert single.indices.tolist() == [[0]]
+    assert single.valid.tolist() == [[True]]
+    assert outside.indices.tolist() == [[-1]]
+    assert outside.valid.tolist() == [[False]]
+    assert pair.valid.tolist() == [[True, True]]
+    assert sorted(pair.indices[0].tolist()) == [0, 1]
+
+
 def test_hybrid_has_explicit_invalid_slots(search_device):
     reference = torch.zeros(1, 3, dtype=torch.float64, device=search_device)
     queries = torch.tensor(

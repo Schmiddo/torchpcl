@@ -138,7 +138,8 @@ One-shot equivalents:
 - `hybrid_neighbors(reference, queries, radius, k, algorithm="auto")`
 
 Every call returns `Neighbors(indices, distances2, valid)`. Candidate order and
-distance-tie resolution are unspecified.
+distance-tie resolution are unspecified. Radius and hybrid searches include
+candidates exactly on the radius boundary.
 
 ## Filtering
 
@@ -148,7 +149,8 @@ distance-tie resolution are unspecified.
 radius_outliers(cloud, radius, k) -> torch.Tensor
 ```
 
-Outliers are points with less than `k` neighbors in the given radius.
+Outliers are points with less than `k` neighbors in the given radius. The query
+point itself is included in the count, and the radius boundary is inclusive.
 
 ### `statistical_outliers(...)`
 
@@ -158,6 +160,7 @@ statistical_outliers(cloud, k, std_ratio=2.0) -> torch.Tensor
 
 Computes each point's available mean unsquared k-NN distance, then classifies
 against `cloud_mean + std_ratio * cloud_std` independently per batch entry.
+The query point itself is included among the `k` neighbors.
 The standard deviation is the sample standard deviation; one finite score has
 standard deviation zero. Missing point scores and empty-cloud summaries are
 NaN, and rows without scores are outliers.

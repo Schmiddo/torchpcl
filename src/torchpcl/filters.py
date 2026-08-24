@@ -16,9 +16,9 @@ def radius_outliers(
     radius: float,
     k: int,
 ) -> torch.Tensor:
-    """Classify points by their support within ``radius``."""
+    """Classify points by inclusive-radius support, including the point itself."""
     if not 2 <= k <= 64:
-        raise ValueError("min_neighbors must be in [2, 64]")
+        raise ValueError("k must be in [2, 64]")
     if not math.isfinite(radius) or radius <= 0:
         raise ValueError("radius must be finite and positive")
 
@@ -60,7 +60,7 @@ def statistical_outliers(
     k: int,
     std_ratio: float = 2.0,
 ) -> torch.Tensor:
-    """Classify points from per-cloud distributions of mean k-NN distance."""
+    """Classify points from mean k-NN distance, including the point itself."""
     if not 2 <= k <= 64:
         raise ValueError("k must be in [2, 64]")
     if not math.isfinite(std_ratio) or std_ratio < 0:

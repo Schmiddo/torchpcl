@@ -12,6 +12,14 @@ from .cloud import PointCloud, PointCloudLike, as_point_cloud
 from .validation import check_cloud_pair
 
 
+def _inclusive_backend_radius(radius: float) -> float:
+    """Expand finite radii by one float32 ULP for strict native searches."""
+    if math.isinf(radius):
+        return radius
+    value = torch.tensor(radius, dtype=torch.float32)
+    return float(torch.nextafter(value, value.new_tensor(math.inf)))
+
+
 @dataclass(frozen=True, eq=False)
 class Neighbors:
     """Fixed-width neighbor search results.
@@ -93,7 +101,11 @@ class NeighborIndex:
                 valid=torch.empty(shape, dtype=torch.bool, device=query_cloud.device),
             )
 
-        indices, _ = self._backend.knn(query_cloud, k, float(radius))
+        # Native BVH traversal treats its culling radius as a strict bound.
+        # Expand that float32 bound just enough to retrieve boundary candidates,
+        # then apply the public inclusive bound below in the input dtype.
+        backend_radius = _inclusive_backend_radius(float(radius))
+        indices, _ = self._backend.knn(query_cloud, k, backend_radius)
         indices = indices.to(torch.int64)
         backend_valid = indices >= 0
         if self._reference.points.shape[0] == 0:

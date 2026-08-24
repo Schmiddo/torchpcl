@@ -116,13 +116,14 @@ Cleaning is mask-first so inspection and selection stay separate:
 outliers = tp.radius_outliers(
     cloud,
     radius=0.10,
-    min_neighbors=8,
-    include_self=False,
+    k=8,
 )
 clean = cloud.select_points(~outliers)
 ```
 
-`statistical_outliers` provides the corresponding per-cloud k-NN distance filter.
+The query point itself is included in the neighbor count. The radius boundary
+is inclusive. `statistical_outliers` provides the corresponding per-cloud k-NN
+distance filter and likewise includes the query point.
 
 ## Corresponding-Point Alignment
 
