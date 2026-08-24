@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
 from os import PathLike
 from typing import Any
 
@@ -22,11 +23,9 @@ _DTYPES = {
     torch.int8: np.int8,
     torch.int16: np.int16,
     torch.int32: np.int32,
-    torch.int64: np.int64,
     torch.uint8: np.uint8,
     torch.uint16: np.uint16,
     torch.uint32: np.uint32,
-    torch.uint64: np.uint64,
 }
 
 
@@ -93,8 +92,9 @@ def save(
 ) -> None:
     """Save one point cloud to a binary PLY file.
 
-    When the cloud has features, ``features`` must provide a name for each feature
-    column in order.
+    When the cloud has features, ``feature_names`` must provide a name for each
+    flattened feature column in order. Feature values must use a scalar dtype
+    supported by PLY.
     """
     packed = as_point_cloud(cloud, "cloud")
     if packed.batch_size != 1:
@@ -102,11 +102,22 @@ def save(
             f"cloud must contain exactly one batch entry, got {packed.batch_size}"
         )
 
+    flat_features = None
     if packed.features is None:
         if feature_names:
             raise ValueError("feature names were provided but cloud has no features")
     else:
-        if len(feature_names) != packed.features.flatten(1).shape[-1]:
+        if packed.features.dtype not in _DTYPES:
+            supported = ", ".join(str(dtype) for dtype in _DTYPES)
+            raise ValueError(
+                "features must have a PLY-compatible dtype "
+                f"({supported}), got {packed.features.dtype}"
+            )
+        feature_count = math.prod(packed.features.shape[1:])
+        flat_features = packed.features.reshape(
+            packed.features.shape[0], feature_count
+        )
+        if len(feature_names) != feature_count:
             raise ValueError(
                 f"number of feature names ({len(feature_names)}) does not match feature "
                 f"shape {tuple(packed.features.shape)}"
@@ -118,8 +129,10 @@ def save(
     ]
     if packed.normals is not None:
         vertex_dtype.extend((name, geometry_dtype) for name in ("nx", "ny", "nz"))
-    if packed.features is not None:
-        vertex_dtype.extend((fname, _DTYPES[packed.features.dtype]) for fname in feature_names)
+    if flat_features is not None:
+        vertex_dtype.extend(
+            (fname, _DTYPES[flat_features.dtype]) for fname in feature_names
+        )
     vertices = np.empty(packed.points.shape[0], dtype=vertex_dtype)
 
     def _serialize(tensor, names):
@@ -130,8 +143,8 @@ def save(
     _serialize(packed.points, ("x", "y", "z"))
     if packed.normals is not None:
         _serialize(packed.normals, ("nx", "ny", "nz"))
-    if packed.features is not None:
-        _serialize(packed.features, feature_names)
+    if flat_features is not None:
+        _serialize(flat_features, feature_names)
 
     element = PlyElement.describe(vertices, "vertex")
     PlyData([element], byte_order="<").write(path)

@@ -72,6 +72,31 @@ def test_feature_columns_round_trip(tmp_path):
     assert torch.equal(restored.features, cloud.features)
 
 
+def test_multidimensional_feature_columns_are_flattened(tmp_path):
+    features = torch.arange(8, dtype=torch.int32).reshape(2, 2, 2)
+    cloud = tp.PointCloud.from_points(torch.randn(2, 3), features=features)
+    path = tmp_path / "multidimensional-features.ply"
+    columns = ["a", "b", "c", "d"]
+
+    torchpcl.io.save(path, cloud, feature_names=columns)
+    restored = torchpcl.io.load(path, feature_names=columns)
+
+    assert restored.features.shape == (2, 4)
+    assert torch.equal(restored.features, features.flatten(1))
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.bool, torch.float16, torch.int64, torch.uint64]
+)
+def test_save_rejects_unsupported_feature_dtypes(tmp_path, dtype):
+    cloud = tp.PointCloud.from_points(
+        torch.randn(2, 3), features=torch.zeros(2, 1, dtype=dtype)
+    )
+
+    with pytest.raises(ValueError, match="PLY-compatible dtype"):
+        torchpcl.io.save(tmp_path / "unsupported.ply", cloud, feature_names=["value"])
+
+
 @pytest.mark.parametrize(
     ("vertex_dtype", "message"),
     [

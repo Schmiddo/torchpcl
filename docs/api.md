@@ -38,7 +38,10 @@ The geometry output dtype can be selected with `dtype=torch.float32` or
 
 `torchpcl.io.save(path, cloud)` saves one tensor or one-entry `PointCloud` as binary
 PLY. Additional scalar vertex properties can be mapped to the `PointCloud.features`
-tensor by passing the same ordered sequence of strings to `features` on load and save.
+tensor by passing the same ordered sequence of strings to `feature_names` on load
+and save. Feature trailing dimensions are flattened when saving and load back as
+`(P, F)`. Supported feature dtypes are `int8`, `int16`, `int32`, `uint8`, `uint16`,
+`uint32`, `float32`, and `float64`.
 The equivalent `load_ply` and `save_ply` names are also exported from `torchpcl`.
 
 ## Geometry
