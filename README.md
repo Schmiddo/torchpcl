@@ -254,31 +254,33 @@ returns `RegistrationMetrics`.
 
 ### PLY registration tool
 
-The `torchpcl.tools.register` tool aligns a source PLY to a target PLY.
-By default it downsamples both clouds, computes oriented normals and FPFH,
-runs fast global registration, and refines the result with point-to-point ICP:
+The `torchpcl.tools.register` tool aligns two or more PLY point clouds. By
+default it downsamples and describes every cloud, runs fast global registration
+for every pair, chooses a maximum spanning tree using inlier fitness, and runs
+point-to-point ICP only along that tree. The final input defines the output
+reference frame:
 
 ```bash
-uv run -m torchpcl.tools.register source.ply target.ply \
+uv run -m torchpcl.tools.register scan-1.ply scan-2.ply scan-3.ply \
     --voxel-size 0.02 \
     --output combined.ply
 ```
 
-It prints the final source-to-target matrix, fitness, and inlier RMSE. The
-optional output contains the transformed source followed by the target and
-preserves standard PLY `red`, `green`, and `blue` vertex colors. If only one
-input is colored, its values remain untouched. Uncolored source points are
-written in red and uncolored target points in blue. The normal, feature, FGR,
-and ICP radii default to multiples of `--voxel-size` and can be overridden
-independently; choose a voxel size appropriate for the units and sampling
-density of the input clouds.
+It prints every input-to-reference matrix and the metrics for the selected ICP
+edges. The optional output preserves standard PLY `red`, `green`, and `blue`
+vertex colors; each uncolored input receives a reproducible random solid color.
+A same-stem `.npz` file contains one boolean point-ownership mask per input,
+keyed by its filename stem. Duplicate stems receive `-1`, `-2`, and subsequent
+suffixes. The normal, feature, FGR, and ICP radii default to multiples of
+`--voxel-size` and can be overridden independently; choose a voxel size
+appropriate for the units and sampling density of the input clouds.
 
-Use `--no-global-registration` for ICP from identity, or
+Use `--no-global-registration` to ICP an input-order chain from identity, or
 `--icp-objective point-to-plane` to use target normals (estimating them when
 the PLY does not contain normals). The equivalent module invocation is:
 
 ```bash
-python -m torchpcl.tools.register source.ply target.ply
+python -m torchpcl.tools.register scan-1.ply scan-2.ply scan-3.ply
 ```
 
 ## Behavior
