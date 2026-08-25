@@ -1,7 +1,7 @@
 #include "backend.h"
 #include "common/checks.h"
 
-#include <torch/extension.h>
+#include <torch/csrc/utils/pybind.h>
 
 namespace torchpcl {
 

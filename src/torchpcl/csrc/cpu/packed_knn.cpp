@@ -2,6 +2,7 @@
 #include "common/candidate.h"
 
 #include <ATen/Parallel.h>
+#include <ATen/ops/empty.h>
 #include <c10/util/Exception.h>
 
 #include <algorithm>

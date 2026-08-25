@@ -7,6 +7,7 @@
 #include "cuBQL/queries/pointData/knn.h"
 
 #include <ATen/Parallel.h>
+#include <ATen/ops/empty.h>
 #include <c10/util/Exception.h>
 
 #include <cstdint>

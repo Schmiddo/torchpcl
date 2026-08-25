@@ -3,6 +3,7 @@
 
 #include <ATen/Dispatch.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/ops/empty.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAException.h>
 

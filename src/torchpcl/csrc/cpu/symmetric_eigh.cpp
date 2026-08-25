@@ -3,6 +3,7 @@
 
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
+#include <ATen/ops/empty.h>
 
 namespace torchpcl {
 
