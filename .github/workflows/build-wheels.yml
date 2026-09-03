@@ -1,0 +1,95 @@
+name: Build wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Python ${{ matrix.python }}, Torch ${{ matrix.stack.torch }}, ${{ matrix.stack.cuda }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+        stack:
+          - torch: "2.11.0"
+            cuda: cu128
+            toolkit: "12.8.1"
+          - torch: "2.12.1"
+            cuda: cu130
+            toolkit: "13.0.2"
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          activate-environment: true
+          cache-suffix: torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}
+          python-version: ${{ matrix.python }}
+
+      - name: Install CUDA toolkit
+        id: cuda
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: ${{ matrix.stack.toolkit }}
+          method: network
+          sub-packages: '["nvcc", "cudart-dev"]'
+          non-cuda-sub-packages: '["libcublas-dev", "libcusparse-dev", "libcusolver-dev", "libcurand-dev", "libcufft-dev"]'
+          log-file-suffix: ${{ matrix.stack.cuda }}-py${{ matrix.python }}.txt
+
+      - name: Install build dependencies
+        run: |
+          uv pip install \
+            "torch==${{ matrix.stack.torch }}" \
+            build ninja "setuptools>=77" wheel \
+            --torch-backend ${{ matrix.stack.cuda }}
+
+      - name: Build wheel
+        env:
+          CUDA_HOME: ${{ steps.cuda.outputs.CUDA_PATH }}
+          MAX_JOBS: "2"
+          TORCHPCL_WITH_CUDA: "1"
+          TORCH_CUDA_ARCH_LIST: "8.0;8.6;8.9;9.0+PTX"
+        run: python -m build --wheel --no-isolation
+
+      - name: Smoke-test wheel
+        run: |
+          uv pip install --reinstall-package torchpcl dist/*.whl
+          cd "${RUNNER_TEMP}"
+          python -c "import torchpcl; print(torchpcl.__version__)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.whl
+          fail_on_unmatched_files: true
+          generate_release_notes: true
