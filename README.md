@@ -9,8 +9,27 @@ point-cloud metrics, and single- or multi-scale ICP. See the [API reference](doc
 
 ## Installation
 
-Extensions are compiled at installation time against the PyTorch in the active
-environment. Build isolation must be disabled:
+Binary wheels from tagged releases are available through the
+[wheel index](https://schmiddo.github.io/torchpcl/wheels/). Select the index
+matching the installed PyTorch and CUDA build. For example, for PyTorch 2.14.0
+with CUDA 13.0:
+
+```bash
+uv pip install --no-deps torchpcl \
+  --find-links https://schmiddo.github.io/torchpcl/wheels/torch2.14.0-cu130/
+```
+
+To install from source, clone the repository with its cuBQL submodule and sync
+the environment:
+
+```bash
+git clone --recurse-submodules https://github.com/Schmiddo/torchpcl.git
+cd torchpcl
+uv sync
+```
+
+The native extensions are compiled against PyTorch in the active environment,
+so build isolation must be disabled when using pip directly:
 
 ```bash
 pip install --no-build-isolation .
@@ -18,21 +37,15 @@ pip install --no-build-isolation .
 
 A CUDA build requires `CUDA_HOME` to point to a toolkit compatible with the
 installed PyTorch. The default `TORCHPCL_WITH_CUDA=auto` builds CUDA when such a
-toolkit is found and otherwise builds CPU-only with an explicit warning. To
-force a CPU-only build:
-
-```bash
-TORCHPCL_WITH_CUDA=0 pip install --no-build-isolation .
-```
-
-Use `TORCHPCL_WITH_CUDA=1` to require CUDA and fail installation when the
-toolkit is unavailable.
+toolkit is found and otherwise builds CPU-only with an explicit warning. Use
+`TORCHPCL_WITH_CUDA=1` to require CUDA or `TORCHPCL_WITH_CUDA=0` to force a
+CPU-only build.
 
 Set `TORCH_CUDA_ARCH_LIST` to override local GPU architecture detection or
 `TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout.
 
-Published source distributions include the required cuBQL headers. When
-installing from a Git checkout, initialize the submodule first:
+Published source distributions include the required cuBQL headers. If an
+existing Git checkout does not have the submodule initialized, run:
 
 ```bash
 git submodule update --init third_party/cuBQL
@@ -329,6 +342,13 @@ normal estimation, neighbor indices, and every ICP level. Configure the
 schedule with `--level-voxels`, `--level-distances`, and
 `--level-iterations`; all three lists must have the same length.
 
-Install the `benchmark` dependency group and pass `--comparisons` to add
-small_gicp and Open3D performance rows. Recorded baseline results are in
-[benchmarks/BASELINE.md](benchmarks/BASELINE.md).
+Install the optional comparison libraries from the Python package index, then
+pass `--comparisons` to add small-gicp and Open3D performance rows:
+
+```bash
+uv sync --group benchmark
+uv run python benchmarks/run_benchmark.py --task all --comparisons
+```
+
+These libraries are benchmark-only dependencies and are not Git submodules.
+Recorded baseline results are in [benchmarks/BASELINE.md](benchmarks/BASELINE.md).
