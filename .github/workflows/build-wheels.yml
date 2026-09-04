@@ -11,13 +11,18 @@ permissions:
 
 jobs:
   build:
-    name: Python ${{ matrix.python }}, Torch ${{ matrix.stack.torch }}, ${{ matrix.stack.cuda }}
-    runs-on: ubuntu-24.04
+    name: Python ${{ matrix.python }}, Torch ${{ matrix.stack.torch }}, ${{ matrix.stack.cuda }}, ${{ matrix.platform.arch }}
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         python: ["3.13", "3.14"]
+        platform:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
         stack:
           - torch: "2.11.0"
             cuda: cu128
@@ -34,7 +39,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           activate-environment: true
-          cache-suffix: torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}
+          cache-suffix: torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}-${{ matrix.platform.arch }}
           python-version: ${{ matrix.python }}
 
       - name: Install CUDA toolkit
@@ -45,7 +50,7 @@ jobs:
           method: network
           sub-packages: '["nvcc", "cudart-dev"]'
           non-cuda-sub-packages: '["libcublas-dev", "libcusparse-dev", "libcusolver-dev", "libcurand-dev", "libcufft-dev"]'
-          log-file-suffix: ${{ matrix.stack.cuda }}-py${{ matrix.python }}.txt
+          log-file-suffix: ${{ matrix.stack.cuda }}-py${{ matrix.python }}-${{ matrix.platform.arch }}.txt
 
       - name: Install build dependencies
         run: |
@@ -70,7 +75,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: wheels-torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}
+          name: wheels-torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}-${{ matrix.platform.arch }}
           path: dist/*.whl
           if-no-files-found: error
 
