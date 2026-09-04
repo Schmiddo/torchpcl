@@ -255,8 +255,22 @@ size. `voxel_size=None` uses the original clouds. Other levels are voxelized
 independently from the original inputs and execute in the supplied order.
 
 `ICPOptions` selects a `PointToPoint` or `PointToPlane` objective, convergence
-tolerances, and an optional `HuberLoss`. Point-to-plane requires normals
-attached to the target `PointCloud`; ICP never estimates normals implicitly.
+tolerances, and an optional robust loss (`HuberLoss`, `L1Loss`, `CauchyLoss`,
+`GMLoss`, or `TukeyLoss`) that downweights correspondences with a large
+residual. Point-to-plane requires normals attached to the target
+`PointCloud`; ICP never estimates normals implicitly.
+
+Robust losses are IRLS weight functions of the residual magnitude `r`
+(`delta` is each dataclass's scale parameter, default `1.0`):
+
+- `HuberLoss`: `1` for `r <= delta`, else `delta / r`.
+- `L1Loss`: `1 / r` (no `delta`).
+- `CauchyLoss`: `1 / (1 + (r / delta)^2)`.
+- `GMLoss`: `delta^2 / (delta^2 + r^2)^2`, matching Open3D's Geman-McClure
+  kernel exactly — note this does not evaluate to `1` at `r = 0` the way the
+  other kernels do, since a per-kernel constant scale factor does not change
+  the weighted least-squares solution.
+- `TukeyLoss`: `(1 - (r / delta)^2)^2` for `r <= delta`, else `0`.
 
 The result contains final transforms, final-level convergence and metrics,
 total iteration counts, and a tuple of `ICPLevelResult` diagnostics. It never

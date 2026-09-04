@@ -2,7 +2,7 @@ import pytest
 import torch
 
 import torchpcl as tp
-from torchpcl.registration import _materialize_level
+from torchpcl.registration import _kernel_weight, _materialize_level
 from torchpcl.transforms import pose_to_matrix, transform_points
 
 from conftest import random_cloud, random_rigid_transform
@@ -198,6 +198,61 @@ def test_huber_loss_produces_finite_result(search_device):
 
     assert torch.isfinite(result.transforms).all()
     assert torch.isfinite(result.inlier_rmse).all()
+
+
+def test_tukey_loss_produces_finite_result(search_device):
+    target = random_cloud(200, search_device, seed=6)
+    source = target.clone()
+    source[-1] += 0.05
+
+    result = tp.icp(
+        source,
+        target,
+        [_level()],
+        options=tp.ICPOptions(robust_loss=tp.TukeyLoss(delta=0.01)),
+    )
+
+    assert torch.isfinite(result.transforms).all()
+    assert torch.isfinite(result.inlier_rmse).all()
+
+
+def test_kernel_weight_matches_closed_form(device):
+    residual = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64, device=device)
+
+    huber = _kernel_weight(residual, tp.HuberLoss(delta=1.0))
+    torch.testing.assert_close(
+        huber, torch.tensor([1.0, 1.0, 0.5], dtype=torch.float64, device=device)
+    )
+
+    cauchy = _kernel_weight(residual, tp.CauchyLoss(delta=1.0))
+    torch.testing.assert_close(
+        cauchy, torch.tensor([1.0, 0.5, 0.2], dtype=torch.float64, device=device)
+    )
+
+    gm = _kernel_weight(residual, tp.GMLoss(delta=1.0))
+    torch.testing.assert_close(
+        gm, torch.tensor([1.0, 0.25, 0.04], dtype=torch.float64, device=device)
+    )
+
+    tukey = _kernel_weight(residual, tp.TukeyLoss(delta=1.0))
+    torch.testing.assert_close(
+        tukey, torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64, device=device)
+    )
+
+    l1 = _kernel_weight(residual, tp.L1Loss())
+    assert bool(torch.isfinite(l1).all())
+    assert l1[0] > 1e10
+    torch.testing.assert_close(
+        l1[1:], torch.tensor([1.0, 0.5], dtype=torch.float64, device=device)
+    )
+
+
+@pytest.mark.parametrize(
+    "loss_type", [tp.HuberLoss, tp.CauchyLoss, tp.GMLoss, tp.TukeyLoss]
+)
+def test_robust_loss_rejects_nonpositive_delta(loss_type):
+    with pytest.raises(ValueError, match="delta"):
+        loss_type(delta=0)
 
 
 def test_initial_transform_reaches_first_level(search_device):

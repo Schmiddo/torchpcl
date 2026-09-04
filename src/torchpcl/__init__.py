@@ -43,15 +43,20 @@ from .normals import (
     orient_normals_toward_viewpoint,
 )
 from .registration import (
+    CauchyLoss,
     ConvergenceCriteria,
+    GMLoss,
     HuberLoss,
     ICPLevel,
     ICPLevelResult,
     ICPOptions,
     ICPResult,
+    L1Loss,
     PointToPlane,
     PointToPoint,
     RegistrationMetrics,
+    RobustLoss,
+    TukeyLoss,
     evaluate_registration,
     icp,
 )
@@ -61,6 +66,7 @@ from .voxel import Voxelization, voxelize
 __version__ = _distribution_version("torchpcl")
 
 __all__ = [
+    "CauchyLoss",
     "ConvergenceCriteria",
     "CorrespondenceSet",
     "CovarianceResult",
@@ -68,11 +74,13 @@ __all__ = [
     "FGRResult",
     "FPFHResult",
     "FScoreResult",
+    "GMLoss",
     "HuberLoss",
     "ICPLevel",
     "ICPLevelResult",
     "ICPOptions",
     "ICPResult",
+    "L1Loss",
     "NeighborIndex",
     "Neighbors",
     "NormalResult",
@@ -83,6 +91,8 @@ __all__ = [
     "PointToPoint",
     "ProcrustesResult",
     "RegistrationMetrics",
+    "RobustLoss",
+    "TukeyLoss",
     "Voxelization",
     "as_point_cloud",
     "cat",

@@ -55,6 +55,48 @@ class HuberLoss:
 
 
 @dataclass(frozen=True, kw_only=True)
+class L1Loss:
+    """L1 residual weighting."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class CauchyLoss:
+    """Cauchy (Lorentzian) residual weighting."""
+
+    delta: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.delta > 0:
+            raise ValueError("delta must be positive")
+
+
+@dataclass(frozen=True, kw_only=True)
+class GMLoss:
+    """Geman-McClure residual weighting."""
+
+    delta: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.delta > 0:
+            raise ValueError("delta must be positive")
+
+
+@dataclass(frozen=True, kw_only=True)
+class TukeyLoss:
+    """Tukey biweight residual weighting."""
+
+    delta: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.delta > 0:
+            raise ValueError("delta must be positive")
+
+
+RobustLoss = HuberLoss | L1Loss | CauchyLoss | GMLoss | TukeyLoss
+_ROBUST_LOSS_TYPES = (HuberLoss, L1Loss, CauchyLoss, GMLoss, TukeyLoss)
+
+
+@dataclass(frozen=True, kw_only=True)
 class ConvergenceCriteria:
     """Absolute fitness and RMSE change tolerances."""
 
@@ -74,7 +116,7 @@ class ICPOptions:
 
     objective: PointToPoint | PointToPlane = field(default_factory=PointToPoint)
     convergence: ConvergenceCriteria = field(default_factory=ConvergenceCriteria)
-    robust_loss: HuberLoss | None = None
+    robust_loss: RobustLoss | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.objective, (PointToPoint, PointToPlane)):
@@ -82,9 +124,12 @@ class ICPOptions:
         if not isinstance(self.convergence, ConvergenceCriteria):
             raise TypeError("convergence must be ConvergenceCriteria")
         if self.robust_loss is not None and not isinstance(
-            self.robust_loss, HuberLoss
+            self.robust_loss, _ROBUST_LOSS_TYPES
         ):
-            raise TypeError("robust_loss must be HuberLoss or None")
+            raise TypeError(
+                "robust_loss must be HuberLoss, L1Loss, CauchyLoss, GMLoss, "
+                "TukeyLoss, or None"
+            )
 
 
 @dataclass(frozen=True, eq=False)
@@ -248,24 +293,50 @@ def _evaluate(
     )
 
 
+def _kernel_weight(
+    residual_magnitude: torch.Tensor,
+    robust_loss: RobustLoss,
+) -> torch.Tensor:
+    magnitude = residual_magnitude.clamp_min(
+        torch.finfo(residual_magnitude.dtype).tiny
+    )
+    if isinstance(robust_loss, HuberLoss):
+        return torch.where(
+            residual_magnitude <= robust_loss.delta,
+            torch.ones_like(magnitude),
+            robust_loss.delta / magnitude,
+        )
+    if isinstance(robust_loss, L1Loss):
+        return 1.0 / magnitude
+    if isinstance(robust_loss, CauchyLoss):
+        return 1.0 / (1.0 + (residual_magnitude / robust_loss.delta) ** 2)
+    if isinstance(robust_loss, GMLoss):
+        # Matches Open3D's RobustKernel GMLoss::Weight exactly, including its
+        # k^2 / (k^2 + r^2)^2 normalization (weight(0) = 1/delta^2, not 1).
+        # A per-kernel constant scale factor doesn't change the weighted
+        # least-squares solution, so this is intentional, not a bug.
+        delta2 = robust_loss.delta**2
+        denom = delta2 + residual_magnitude**2
+        return delta2 / (denom * denom)
+    assert isinstance(robust_loss, TukeyLoss)
+    ratio2 = (residual_magnitude / robust_loss.delta) ** 2
+    return torch.where(
+        residual_magnitude <= robust_loss.delta,
+        (1.0 - ratio2) ** 2,
+        torch.zeros_like(ratio2),
+    )
+
+
 def _robust_weights(
     residual_magnitude: torch.Tensor,
     valid: torch.Tensor,
     active: torch.Tensor,
     ids: torch.Tensor,
-    robust_loss: HuberLoss | None,
+    robust_loss: RobustLoss | None,
 ) -> torch.Tensor:
     weights = (valid & active[ids]).to(residual_magnitude.dtype)
     if robust_loss is not None:
-        magnitude = residual_magnitude.clamp_min(
-            torch.finfo(residual_magnitude.dtype).tiny
-        )
-        huber = torch.where(
-            residual_magnitude <= robust_loss.delta,
-            torch.ones_like(magnitude),
-            robust_loss.delta / magnitude,
-        )
-        weights = weights * huber
+        weights = weights * _kernel_weight(residual_magnitude, robust_loss)
     return weights
 
 
@@ -274,7 +345,7 @@ def _point_to_point_delta(
     active: torch.Tensor,
     ids: torch.Tensor,
     offsets: torch.Tensor,
-    robust_loss: HuberLoss | None,
+    robust_loss: RobustLoss | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     residual = (evaluation.current - evaluation.target).norm(dim=1)
     weights = _robust_weights(
@@ -305,7 +376,7 @@ def _point_to_plane_delta(
     active: torch.Tensor,
     ids: torch.Tensor,
     offsets: torch.Tensor,
-    robust_loss: HuberLoss | None,
+    robust_loss: RobustLoss | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     matched_normals = normals[evaluation.indices.clamp(min=0)]
     residual = ((evaluation.current - evaluation.target) * matched_normals).sum(
@@ -530,15 +601,20 @@ def evaluate_registration(
 
 
 __all__ = [
+    "CauchyLoss",
     "ConvergenceCriteria",
+    "GMLoss",
     "HuberLoss",
     "ICPLevel",
     "ICPLevelResult",
     "ICPOptions",
     "ICPResult",
+    "L1Loss",
     "PointToPlane",
     "PointToPoint",
     "RegistrationMetrics",
+    "RobustLoss",
+    "TukeyLoss",
     "evaluate_registration",
     "icp",
 ]
