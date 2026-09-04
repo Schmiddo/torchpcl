@@ -26,10 +26,13 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: aarch64
         stack:
-          - torch: "2.11.0"
-            cuda: cu128
-            toolkit: "12.8.1"
           - torch: "2.12.1"
+            cuda: cu130
+            toolkit: "13.0.2"
+          - torch: "2.13.0"
+            cuda: cu130
+            toolkit: "13.0.2"
+          - torch: "2.14.0"
             cuda: cu130
             toolkit: "13.0.2"
 
