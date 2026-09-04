@@ -1,5 +1,7 @@
 """Point cloud registration and processing built on torch and cuBQL."""
 
+from importlib.metadata import version as _distribution_version
+
 from .alignment import ProcrustesResult, procrustes
 from .cloud import PointCloud, PointCloudLike, as_point_cloud, cat, cat_batch
 from .filters import (
@@ -56,7 +58,7 @@ from .registration import (
 from .transforms import transform
 from .voxel import Voxelization, voxelize
 
-__version__ = "0.2.0"
+__version__ = _distribution_version("torchpcl")
 
 __all__ = [
     "ConvergenceCriteria",

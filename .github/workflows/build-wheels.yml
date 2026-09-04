@@ -14,6 +14,8 @@ jobs:
     name: Python ${{ matrix.python }}, Torch ${{ matrix.stack.torch }}, ${{ matrix.stack.cuda }}, ${{ matrix.platform.arch }}
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
+    env:
+      WHEEL_LOCAL_VERSION: torch${{ matrix.stack.torch }}.${{ matrix.stack.cuda }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +41,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           activate-environment: true
-          cache-suffix: torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}-${{ matrix.platform.arch }}
+          enable-cache: false
           python-version: ${{ matrix.python }}
 
       - name: Install CUDA toolkit
@@ -56,7 +58,7 @@ jobs:
         run: |
           uv pip install \
             "torch==${{ matrix.stack.torch }}" \
-            build ninja "setuptools>=77" wheel \
+            ninja "setuptools>=77" \
             --torch-backend ${{ matrix.stack.cuda }}
 
       - name: Build wheel
@@ -65,7 +67,14 @@ jobs:
           MAX_JOBS: "2"
           TORCHPCL_WITH_CUDA: "1"
           TORCH_CUDA_ARCH_LIST: "8.0;8.6;8.9;9.0+PTX"
-        run: python -m build --wheel --no-isolation
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+              public_version="${GITHUB_REF_NAME#v}"
+          else:
+              public_version="$(uv version --short)"
+          fi
+          uv version --frozen "${public_version}+${WHEEL_LOCAL_VERSION}"
+          uv build --wheel --no-build-isolation
 
       - name: Smoke-test wheel
         run: |
@@ -76,7 +85,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-torch${{ matrix.stack.torch }}-${{ matrix.stack.cuda }}-py${{ matrix.python }}-${{ matrix.platform.arch }}
-          path: dist/*.whl
+          path: dist/*+${{ env.WHEEL_LOCAL_VERSION }}-*.whl
           if-no-files-found: error
 
   release:
@@ -98,3 +107,13 @@ jobs:
           files: dist/*.whl
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  pages:
+    name: Publish documentation and wheel index
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs.yml

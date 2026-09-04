@@ -1,13 +1,25 @@
 # torchpcl
 
-torchpcl provides tensor-first point-cloud registration and processing for
-PyTorch, with packed ragged batching and fast nearest-neighbor search on CPU
+`torchpcl` implements tensor-first point-cloud registration and processing for
+PyTorch, in particular packed ragged batching and fast nearest-neighbor search on CPU
 and CUDA.
 
 ## Installation
 
-The native extension is compiled against PyTorch in the active environment,
-so build isolation must be disabled:
+Binary wheels from tagged releases are available through the
+[wheel index](https://schmiddo.github.io/torchpcl/wheels/). Select the index
+matching the installed PyTorch and CUDA build; uv will then select the wheel
+for the current Python and machine architecture.
+
+For PyTorch 2.11.0 with CUDA 12.8:
+
+```bash
+uv pip install --no-deps torchpcl \
+  --find-links https://schmiddo.github.io/torchpcl/wheels/torch2.11.0-cu128/
+```
+
+To build the native extension from source instead, build it against PyTorch in
+the active environment with build isolation disabled:
 
 ```bash
 pip install --no-build-isolation .

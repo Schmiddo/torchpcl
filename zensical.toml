@@ -1,5 +1,6 @@
 [project]
 site_name = "torchpcl"
+site_url = "https://schmiddo.github.io/torchpcl/"
 site_description = "Point-cloud registration and processing for PyTorch"
 site_author = "Christian Schmidt"
 repo_url = "https://github.com/Schmiddo/torchpcl"
@@ -9,8 +10,8 @@ nav = [
     { "Overview" = "index.md" },
     { "Batching" = "batching.md" },
     { "API reference" = "api.md" },
+    { "Wheel index" = "https://schmiddo.github.io/torchpcl/wheels/" },
 ]
 
 [project.theme]
 language = "en"
-
