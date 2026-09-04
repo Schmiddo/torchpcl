@@ -1,9 +1,3 @@
-[submodule "third_party/open3d"]
-	path = third_party/open3d
-	url = https://github.com/isl-org/open3d
-[submodule "third_party/small_gicp"]
-	path = third_party/small_gicp
-	url = https://github.com/koide3/small_gicp
 [submodule "third_party/cuBQL"]
 	path = third_party/cuBQL
 	url = https://github.com/NVIDIA/cuBQL
