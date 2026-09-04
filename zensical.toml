@@ -1,0 +1,16 @@
+[project]
+site_name = "torchpcl"
+site_description = "Point-cloud registration and processing for PyTorch"
+site_author = "Christian Schmidt"
+repo_url = "https://github.com/Schmiddo/torchpcl"
+repo_name = "Schmiddo/torchpcl"
+edit_uri = "edit/main/docs/"
+nav = [
+    { "Overview" = "index.md" },
+    { "Batching" = "batching.md" },
+    { "API reference" = "api.md" },
+]
+
+[project.theme]
+language = "en"
+

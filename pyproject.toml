@@ -39,6 +39,7 @@ where = ["src"]
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "zensical==0.0.59",
 ]
 benchmark = [
     "open3d; python_version < '3.13'",
