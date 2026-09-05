@@ -92,6 +92,10 @@ with points in selection order, not input order. If `num_samples >= N`, all
 points are returned unchanged (in input order). Attached normals and features
 are carried along for the selected points.
 
+Runs the entire greedy loop natively (CPU or CUDA), like the other
+native-backed operations (search, normals, FPFH); a non-CPU/CUDA device
+raises `RuntimeError`.
+
 ### `estimate_normals(...)`
 
 ```text

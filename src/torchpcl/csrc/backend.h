@@ -31,6 +31,8 @@ SearchResult packed_knn_cpu(
     int64_t k,
     double radius);
 EigenResult symmetric_eigh_3x3_cpu(const at::Tensor& matrices);
+at::Tensor farthest_point_sample_cpu(
+    const at::Tensor& points, int64_t num_samples);
 
 #ifdef TORCHPCL_WITH_CUDA
 std::shared_ptr<BvhImpl> make_cuda_bvh(const at::Tensor& points);
@@ -44,6 +46,8 @@ SearchResult packed_knn_cuda(
     int64_t k,
     double radius);
 EigenResult symmetric_eigh_3x3_cuda(const at::Tensor& matrices);
+at::Tensor farthest_point_sample_cuda(
+    const at::Tensor& points, int64_t num_samples);
 #endif
 
 class BvhIndex {
@@ -65,6 +69,8 @@ SearchResult packed_knn(
 SearchResult feature_knn1(
     const at::Tensor& reference, const at::Tensor& queries);
 EigenResult symmetric_eigh_3x3(const at::Tensor& matrices);
+at::Tensor farthest_point_sample(
+    const at::Tensor& points, int64_t num_samples);
 
 bool has_cuda();
 

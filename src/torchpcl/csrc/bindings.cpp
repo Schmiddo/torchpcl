@@ -107,6 +107,34 @@ EigenResult symmetric_eigh_3x3(const at::Tensor& matrices) {
   TORCH_CHECK(false, "unsupported matrices device: ", matrices.device());
 }
 
+at::Tensor farthest_point_sample(
+    const at::Tensor& points, int64_t num_samples) {
+  TORCH_CHECK(
+      points.scalar_type() == at::kFloat || points.scalar_type() == at::kDouble,
+      "points must be float32 or float64");
+  TORCH_CHECK(points.is_contiguous(), "points must be contiguous");
+  TORCH_CHECK(
+      points.dim() == 2 && points.size(1) == 3,
+      "points must have shape (N, 3)");
+  TORCH_CHECK(
+      num_samples >= 1 && num_samples < points.size(0),
+      "num_samples must be in [1, N)");
+  if (points.device().is_cpu()) {
+    return farthest_point_sample_cpu(points, num_samples);
+  }
+  if (points.is_cuda()) {
+#ifdef TORCHPCL_WITH_CUDA
+    return farthest_point_sample_cuda(points, num_samples);
+#else
+    TORCH_CHECK(
+        false,
+        "torchpcl was built without CUDA support; reinstall with "
+        "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit");
+#endif
+  }
+  TORCH_CHECK(false, "unsupported points device: ", points.device());
+}
+
 bool has_cuda() {
 #ifdef TORCHPCL_WITH_CUDA
   return true;
@@ -124,5 +152,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("packed_knn", &torchpcl::packed_knn);
   module.def("feature_knn1", &torchpcl::feature_knn1);
   module.def("symmetric_eigh_3x3", &torchpcl::symmetric_eigh_3x3);
+  module.def("farthest_point_sample", &torchpcl::farthest_point_sample);
   module.def("has_cuda", &torchpcl::has_cuda);
 }

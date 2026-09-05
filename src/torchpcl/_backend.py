@@ -30,6 +30,12 @@ def symmetric_eigh_3x3(
     return _C.symmetric_eigh_3x3(matrices.contiguous())
 
 
+def farthest_point_sample(points: torch.Tensor, num_samples: int) -> torch.Tensor:
+    """Return num_samples row indices in greedy farthest-point selection order."""
+    _check_device(points.device)
+    return _C.farthest_point_sample(points.detach().contiguous(), num_samples)
+
+
 def feature_knn1(
     reference: torch.Tensor, queries: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -91,4 +97,10 @@ class PackedBackend:
         )
 
 
-__all__ = ["BvhBackend", "PackedBackend", "feature_knn1", "symmetric_eigh_3x3"]
+__all__ = [
+    "BvhBackend",
+    "PackedBackend",
+    "farthest_point_sample",
+    "feature_knn1",
+    "symmetric_eigh_3x3",
+]
