@@ -1,4 +1,12 @@
-# Registration benchmarks
+# Benchmarks
+
+Compare torchpcl with Open3D, operation by operation. Every benchmark is built
+from the same `Case`/`measure` contract (see "Adding a new benchmark" below),
+so new operations can be added independently of the CLI or of each other, and
+the same cases can later back an ASV regression suite without going through
+either script's console/JSON output.
+
+## Registration benchmarks
 
 Compare torchpcl with Open3D on pairs with a known rigid transform. Run from
 the repository root. Open3D needs Python 3.12 with the current dependency set;
@@ -38,7 +46,7 @@ The suite runs two independent cases:
 Default voxel size is `0.05` in the input's units. Adjust `--voxel-size`,
 `--icp-distance`, and `--fgr-distance` for other datasets. See `--help` for options.
 
-## What is measured
+### What is measured
 
 Both libraries receive shared Open3D voxel centroids and, for FGR,
 Open3D FPFH descriptors. Coordinates and descriptors are rounded to the selected
@@ -101,24 +109,62 @@ A solver success flag indicates numerical completion, not correct registration.
 There are no dataset-independent accuracy pass/fail thresholds: inspect the
 ground-truth errors, especially for failed alignments with low inlier RMSE.
 
-## Reusing the components
+## Sampling benchmark
 
-The CLI is only a runner; importing the components does not parse arguments,
-configure threads, load data, or import Open3D/PyTorch. The modules are:
+Compares `torchpcl.farthest_point_sample` with Open3D's
+`farthest_point_down_sample` on a random point cloud (no `data/` pair
+needed). Uses the same benchmark environment as above:
 
-- `cases.py`: `RegistrationConfig`, `prepare_pair`, and `make_case` prepare inputs
-  and construct independent ICP/FGR cases for each backend/device.
-- `metrics.py`: ground-truth validation and pose errors, independent of registration.
-- `runner.py`: optional warmup/repetition timing, peak-memory measurement, and
-  sample aggregation.
-- `memory.py`: process RSS and per-process CUDA memory sampling, independent of
-  either registration backend.
-- `registration.py`: command-line options, device selection, console and JSON output.
+```bash
+.venv-benchmark/bin/python benchmarks/sampling.py --json results-sampling.json
+.venv-benchmark/bin/python benchmarks/sampling.py --num-points 1000000 --num-samples 20000
+.venv-benchmark/bin/python benchmarks/sampling.py --device cpu --dtype float64
+```
+
+Both backends select the same start index (0) on an identical, dtype-quantized
+input, so their outputs are directly comparable. Open3D's
+`farthest_point_down_sample` is a legacy CPU/float64-only API (`reference_only:
+true` in JSON); torchpcl runs on `--device`'s selected device(s) and dtype.
+Timing excludes input construction; there is one untimed warmup, five measured
+repetitions by default, and one additional untimed call for peak RAM/VRAM
+(see "What is measured" above for the memory-sampling methodology, which this
+benchmark shares via `benchmarks/memory.py`).
+
+## Architecture
+
+Every benchmark is split into three independent layers so that adding an
+operation doesn't touch the others:
+
+- **A `Case`** (`case.py`): a backend/operation-neutral dataclass —
+  `run`, `synchronize`, `reset`, `evaluate`, an optional
+  `device_memory_reader`, and a `metadata` dict of static descriptive fields
+  (dtype, whether a backend is a reference-only baseline, ...). `case.py`
+  also holds `select_devices`, the shared `--device all/cpu/cuda` resolution
+  used by every benchmark.
+- **Per-operation "cases" modules** (`registration_cases.py`,
+  `sampling_cases.py`, and future ones) prepare shared inputs once (loading a
+  pair, generating a random cloud, ...) and build a `Case` per
+  backend/device/variant. This is the only place that knows about a specific
+  operation's inputs, options, and (if any) accuracy metrics.
+- **`runner.measure`** (`runner.py`) times a `Case` with warmup/repetition and
+  peak-memory sampling (`memory.py`, backend-neutral). It has no knowledge of
+  what a specific operation measures: it medians whatever numeric fields
+  `case.evaluate()` returns (an empty dict if there's nothing to score, as for
+  sampling) and reports `case.metadata` alongside them.
+
+The CLI scripts (`registration.py`, `sampling.py`) are thin: argument parsing,
+picking which cases to build, and console/JSON output. Shared CLI plumbing
+(argument types, thread configuration, environment metadata, JSON writing,
+`open3d` import guard) lives in `cli.py`; both scripts import it rather than
+each defining their own copy. `metrics.py` holds registration-specific
+ground-truth validation and pose errors, independent of `runner.py`.
+
+### Reusing the components
 
 An external harness can prepare a case in its setup phase and time only execution:
 
 ```python
-from benchmarks.cases import RegistrationConfig, prepare_pair, make_case
+from benchmarks.registration_cases import RegistrationConfig, prepare_pair, make_case
 
 config = RegistrationConfig()  # voxel_size=0.05, dtype="float32"
 pair = prepare_pair("data", config, with_features=True)
@@ -136,4 +182,25 @@ boundary when the harness manages synchronization itself. `case.reset()` resets
 Open3D's RNG; torchpcl FGR uses the seed stored in its options on each call.
 An external harness owns thread configuration and warmups. This separation lets
 an ASV adapter reuse preparation and execution without invoking the CLI or its
-wall-clock runner. No ASV dependency or configuration is required yet.
+wall-clock runner — an ASV `time_*` method just calls `case.reset()` then
+`case.run()` (or `case.run_synchronized()`) and lets ASV do its own timing. No
+ASV dependency or configuration is required yet.
+
+### Adding a new benchmark
+
+To benchmark another operation (e.g. `voxelize`, `estimate_normals`, `fpfh`):
+
+1. Add a `<name>_cases.py` module with a `prepare_*` function that builds
+   shared, backend-independent input once, and a `make_case(prepared,
+   backend, device, ...) -> Case` that allocates that backend's inputs/options
+   and returns a `Case`. If the operation has a ground-truth score, compute it
+   in `evaluate(result)`; otherwise leave `evaluate` unset (defaults to
+   returning `{}`, as for sampling).
+2. Add a `<name>.py` CLI script mirroring `sampling.py`'s shape (the smaller
+   of the two existing scripts): parse operation-specific arguments with
+   `cli.py`'s shared helpers, resolve devices with `select_devices`, build one
+   `Case` per backend/device via `make_case`, and pass each to
+   `runner.measure`.
+3. Add a section to this README and, if useful, a `tests/test_benchmark_*.py`
+   covering anything not already exercised by `test_benchmark_runner.py`/
+   `test_benchmark_memory.py`.

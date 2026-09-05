@@ -1,1 +1,1 @@
-"""Reusable registration benchmark components (no runner dependency)."""
+"""Reusable benchmark components: cases, a runner, and shared CLI plumbing."""

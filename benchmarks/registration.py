@@ -4,45 +4,26 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-import json
-import os
 from pathlib import Path
-import platform
-from importlib.metadata import version
 import sys
 
 # Preserve direct-script usage as well as python -m benchmarks.registration.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import numpy as np
-
-from benchmarks.cases import RegistrationConfig, prepare_pair, make_case, select_devices
+from benchmarks.case import select_devices
+from benchmarks.cli import (
+    configure_threads,
+    default_threads,
+    environment_metadata,
+    format_optional,
+    positive_float,
+    positive_int,
+    require_open3d,
+    write_json,
+)
+from benchmarks.registration_cases import RegistrationConfig, prepare_pair, make_case
 from benchmarks.runner import measure
-
-
-def positive_float(value):
-    number = float(value)
-    if not np.isfinite(number) or number <= 0:
-        raise argparse.ArgumentTypeError("must be finite and positive")
-    return number
-
-
-def positive_int(value):
-    number = int(value)
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
-    return number
-
-
-def default_threads():
-    """Prefer physical cores, falling back to the logical CPU count."""
-    try:
-        import psutil
-
-        return psutil.cpu_count(logical=False) or os.cpu_count() or 1
-    except ImportError:
-        return os.cpu_count() or 1
 
 
 def parse_args(argv=None):
@@ -76,12 +57,8 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
-        os.environ[variable] = str(args.threads)
-    try:
-        import open3d as o3d
-    except ImportError:
-        raise SystemExit("Open3D is required; see benchmarks/README.md for Python 3.12 setup")
+    configure_threads(args.threads)
+    o3d = require_open3d()
     import torch
     from torchpcl import _C
 
@@ -102,12 +79,7 @@ def main(argv=None):
         icp_iterations=args.icp_iterations, fgr_iterations=args.fgr_iterations,
     )
     report = {
-        "environment": {
-            "python": platform.python_version(), "platform": platform.platform(),
-            "torch": torch.__version__, "open3d": o3d.__version__,
-            "torchpcl": version("torchpcl"),
-            "gpu": torch.cuda.get_device_name() if "cuda" in devices else None,
-        },
+        "environment": environment_metadata(devices, open3d_version=o3d.__version__),
         "config": {**asdict(config), "devices": devices, "open3d_icp_devices": open3d_devices,
                    "requested_device": args.device,
                    "methods": methods, "threads": args.threads,
@@ -139,8 +111,7 @@ def main(argv=None):
                 pair_report["results"].append(result)
                 median = result["median"]
                 memory = result["memory"]
-                device_peak = memory["device_peak_mib"]
-                device_text = "-" if device_peak is None else f"{device_peak:.1f}"
+                device_text = format_optional(memory["device_peak_mib"])
                 label = f"{directory.name}/{method}/{backend}/{device}"
                 print(f"{label:48} {median['time_ms']:10.3f} "
                       f"{memory['process_rss_peak_mib']:10.1f} {device_text:>10} "
@@ -149,8 +120,7 @@ def main(argv=None):
                       f"{median['fitness']:9.4f}", flush=True)
                 del case
     if args.json:
-        args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+        write_json(report, args.json)
     return report
 
 

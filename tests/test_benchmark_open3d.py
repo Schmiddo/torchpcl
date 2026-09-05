@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.cases import PreparedPair, RegistrationConfig, make_case
+from benchmarks.registration_cases import PreparedPair, RegistrationConfig, make_case
 from benchmarks.runner import measure
 
 

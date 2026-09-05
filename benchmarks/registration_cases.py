@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
+from .case import Case, select_devices
 from .metrics import load_transform, pose_errors
 from .memory import cuda_process_memory_reader
 
@@ -39,21 +40,6 @@ class RegistrationConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if not isinstance(self.seed, int) or not 0 <= self.seed < 2**31:
             raise ValueError("seed must be an integer in [0, 2**31)")
-
-
-def select_devices(requested: str, cuda_available: bool, backend: str = "torchpcl"):
-    """Default to both devices; record unavailable CUDA, but reject explicit CUDA."""
-    if requested not in ("all", "cpu", "cuda"):
-        raise ValueError("device must be all, cpu, or cuda")
-    reason = f"requires an accessible GPU and a CUDA {backend} build"
-    if requested == "cuda" and not cuda_available:
-        raise ValueError(f"CUDA {reason}")
-    devices = ["cpu", "cuda"] if requested == "all" else [requested]
-    skipped = []
-    if "cuda" in devices and not cuda_available:
-        devices.remove("cuda")
-        skipped.append({"backend": backend, "device": "cuda", "reason": reason})
-    return devices, skipped
 
 
 @dataclass
@@ -110,56 +96,7 @@ def prepare_pair(directory: str | Path, config: RegistrationConfig, *, with_feat
                         tuple(features) if with_features else None)
 
 
-@dataclass
-class RegistrationCase:
-    """A prepared operation with explicit reset, synchronization, and evaluation hooks.
-
-    ``run`` only invokes registration. External timers can use ``run_synchronized``
-    to include GPU completion; input preparation and evaluation stay outside it.
-    """
-
-    pair: PreparedPair
-    method: str
-    backend: str
-    device: str
-    run: Callable[[], Any]
-    synchronize: Callable[[], None]
-    device_memory_reader: Callable[[], int] | None
-
-    def reset(self):
-        import open3d as o3d
-        o3d.utility.random.seed(self.pair.config.seed)
-
-    def run_synchronized(self):
-        self.synchronize()
-        result = self.run()
-        self.synchronize()
-        return result
-
-    def evaluate(self, result):
-        import open3d as o3d
-
-        if self.backend == "torchpcl":
-            estimate = result.transforms[0].detach().cpu().numpy()
-        elif self.method == "icp":
-            estimate = result.transformation.cpu().numpy()
-        else:
-            estimate = np.asarray(result.transformation)
-        if not np.isfinite(estimate).all():
-            raise ValueError(f"{self.method}/{self.backend}/{self.device}: non-finite transform")
-        distance = getattr(self.pair.config, f"{self.method}_distance")
-        metrics = o3d.pipelines.registration.evaluate_registration(
-            *self.pair.originals, distance, estimate)
-        return {
-            **pose_errors(estimate, self.pair.expected, np.asarray(self.pair.originals[0].points)),
-            "fitness": metrics.fitness, "inlier_rmse": metrics.inlier_rmse,
-            "transform": estimate.tolist(),
-            "solver_success": bool(result.success.item())
-            if self.backend == "torchpcl" and self.method == "fgr" else None,
-        }
-
-
-def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"):
+def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu") -> Case:
     """Allocate inputs/options once and return an independently reusable case."""
     if method not in ("icp", "fgr") or backend not in ("torchpcl", "open3d"):
         raise ValueError("expected method icp/fgr and backend torchpcl/open3d")
@@ -233,6 +170,44 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
             def run():
                 return registration.registration_fgr_based_on_feature_matching(
                     *pair.clouds, *pair.features, options)
-    return RegistrationCase(
-        pair, method, backend, device, run, synchronize, device_memory_reader
+
+    def reset():
+        import open3d as o3d
+        o3d.utility.random.seed(config.seed)
+
+    def evaluate(result):
+        import open3d as o3d
+
+        if backend == "torchpcl":
+            estimate = result.transforms[0].detach().cpu().numpy()
+        elif method == "icp":
+            estimate = result.transformation.cpu().numpy()
+        else:
+            estimate = np.asarray(result.transformation)
+        if not np.isfinite(estimate).all():
+            raise ValueError(f"{method}/{backend}/{device}: non-finite transform")
+        metrics = o3d.pipelines.registration.evaluate_registration(
+            *pair.originals, distance, estimate)
+        return {
+            **pose_errors(estimate, pair.expected, np.asarray(pair.originals[0].points)),
+            "fitness": metrics.fitness, "inlier_rmse": metrics.inlier_rmse,
+            "transform": estimate.tolist(),
+            "solver_success": bool(result.success.item())
+            if backend == "torchpcl" and method == "fgr" else None,
+        }
+
+    return Case(
+        name=method, backend=backend, device=device,
+        run=run, synchronize=synchronize, reset=reset, evaluate=evaluate,
+        device_memory_reader=device_memory_reader,
+        metadata={
+            "input_dtype": config.dtype,
+            "compute_dtype": (config.dtype if backend == "torchpcl" else
+                              "mixed" if method == "icp" and config.dtype == "float32"
+                              else "float64"),
+            "implementation": "tensor" if backend == "open3d" and method == "icp" else
+                              "legacy" if backend == "open3d" else "torchpcl",
+            "reference_only": backend == "open3d" and method == "fgr",
+            "transform_dtype": "float64" if backend == "open3d" else config.dtype,
+        },
     )

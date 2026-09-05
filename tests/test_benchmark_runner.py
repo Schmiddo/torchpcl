@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from benchmarks.cases import RegistrationConfig, select_devices
+from benchmarks.case import select_devices
 from benchmarks.registration import parse_args
+from benchmarks.registration_cases import RegistrationConfig
 from benchmarks.runner import measure
 
 
@@ -37,8 +38,8 @@ def test_runner_synchronizes_and_excludes_setup_and_evaluation(monkeypatch):
                     source_displacement_rmse=3, fitness=0.9, inlier_rmse=0.1)
 
     case = SimpleNamespace(
-        method="icp", backend="torchpcl", device="cuda",
-        pair=SimpleNamespace(config=RegistrationConfig()),
+        name="icp", backend="torchpcl", device="cuda",
+        metadata={"input_dtype": "float32"},
         device_memory_reader=None,
         reset=lambda: events.append("reset"),
         synchronize=lambda: events.append("sync"),
