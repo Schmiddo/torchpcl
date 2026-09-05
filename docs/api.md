@@ -82,6 +82,16 @@ Returns `Voxelization(cloud, coordinates, point_to_voxel, counts)`. Coordinates
 have columns `(batch, x, y, z)`. `Voxelization.reduce(values, reduction)`
 supports `mean`, `sum`, `min`, `max`, and `first`.
 
+### `farthest_point_sample(cloud, num_samples)`
+
+Greedily selects `num_samples` points that maximize the minimum pairwise
+distance, starting deterministically from point index 0. Only a single cloud
+is supported (a `(N, 3)` tensor, or a `PointCloud`/`(B, N, 3)` tensor with
+batch size 1); a batched input raises `ValueError`. Returns a `PointCloud`
+with points in selection order, not input order. If `num_samples >= N`, all
+points are returned unchanged (in input order). Attached normals and features
+are carried along for the selected points.
+
 ### `estimate_normals(...)`
 
 ```text

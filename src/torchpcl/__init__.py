@@ -60,6 +60,7 @@ from .registration import (
     evaluate_registration,
     icp,
 )
+from .sampling import farthest_point_sample
 from .transforms import transform
 from .voxel import Voxelization, voxelize
 
@@ -102,6 +103,7 @@ __all__ = [
     "estimate_covariances",
     "estimate_normals",
     "evaluate_registration",
+    "farthest_point_sample",
     "fast_global_registration",
     "fast_global_registration_from_correspondences",
     "fpfh",
