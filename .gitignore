@@ -1,5 +1,6 @@
 assets/
 results-*.json
+.venv-benchmark/
 
 __pycache__
 data/

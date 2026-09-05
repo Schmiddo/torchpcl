@@ -329,26 +329,20 @@ uv sync --reinstall-package torchpcl
 
 ## Benchmarks
 
-```bash
-uv run python benchmarks/run_benchmark.py --task all --device cpu --repeats 5
-uv run python benchmarks/run_benchmark.py --task registration --repeats 5
-uv run python benchmarks/run_benchmark.py --task search --search-sizes 512 2048 8192
-uv run python benchmarks/run_benchmark.py --task all --json results.json
-```
-
-The registration task contains alignment-only one-level cases and end-to-end
-multi-level cases. The latter include voxelization, explicit point-to-plane
-normal estimation, neighbor indices, and every ICP level. Configure the
-schedule with `--level-voxels`, `--level-distances`, and
-`--level-iterations`; all three lists must have the same length.
-
-Install the optional comparison libraries from the Python package index, then
-pass `--comparisons` to add small-gicp and Open3D performance rows:
+Compare ICP and fast global registration with Open3D using the ground-truth
+pair in `data/`:
 
 ```bash
-uv sync --group benchmark
-uv run python benchmarks/run_benchmark.py --task all --comparisons
+UV_PROJECT_ENVIRONMENT=.venv-benchmark \
+  uv run --python 3.12 --group benchmark \
+  python benchmarks/registration.py --json results-registration.json
 ```
 
-These libraries are benchmark-only dependencies and are not Git submodules.
-Recorded baseline results are in [benchmarks/BASELINE.md](benchmarks/BASELINE.md).
+The command creates or syncs a separate Python 3.12 environment automatically.
+By default, ICP uses float32 inputs on CPU and CUDA in both libraries. Open3D
+FGR is a CPU/float64 reference because it has no tensor/CUDA API. Unavailable
+CUDA is reported as skipped per library.
+
+The output includes runtime, ground-truth accuracy, peak process RAM, and
+per-process peak VRAM. See [the benchmark guide](benchmarks/README.md) for input
+format, measurement scope, additional pairs, and CUDA options.
