@@ -3,9 +3,10 @@
 Tensor-first point-cloud processing for PyTorch.
 Currently supports packed ragged batching and fast nearest-neighbor search on CPU and CUDA.
 
-The public API covers neighbor search, voxelization, normal estimation,
-point-cloud metrics, and single- or multi-scale ICP. See the [API reference](docs/api.md),
-[batching guide](docs/batching.md), and [migration guide](MIGRATION.md).
+The public API covers neighbor search, voxelization, farthest-point downsampling,
+normal estimation, point-cloud metrics, FPFH features with fast global
+registration, and single- or multi-scale ICP. See the
+[API reference](docs/api.md) and [batching guide](docs/batching.md).
 
 ## Installation
 
@@ -94,7 +95,19 @@ Voxelization returns centroids and the reusable point-to-voxel mapping:
 partition = tp.voxelize(points, voxel_size=0.05)
 downsampled = partition.cloud
 voxel_features = partition.reduce(features, reduction="mean")
+```
 
+Farthest point sampling instead fixes the output point count, greedily
+spreading selections over the cloud (CPU or CUDA, one cloud at a time):
+
+```python
+sampled = tp.farthest_point_sample(points, num_samples=1_024)
+selected_points = sampled.points       # (1_024, 3), in selection order
+```
+
+Normal estimation and covariances work on either downsampled cloud:
+
+```python
 normal_result = tp.estimate_normals(downsampled, radius=0.15, k=30)
 normals = normal_result.normals        # unit normals; signs match attached
                                        # normals if present, else arbitrary
@@ -312,6 +325,8 @@ python -m torchpcl.tools.register scan-1.ply scan-2.ply scan-3.ply
   search queries. Metrics and registration reject empty cloud pairs.
 - Multi-cloud batches currently use brute-force search; BVH indexing currently
   supports a single reference cloud.
+- `farthest_point_sample` currently supports a single cloud; batching is not
+  yet implemented.
 
 ## Development
 

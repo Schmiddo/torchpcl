@@ -50,6 +50,10 @@ benchmark = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/test_benchmark_*.py import the benchmarks/ package, which isn't
+# installed; put the repo root on sys.path so `uv run pytest` collects them
+# without a manual PYTHONPATH=.
+pythonpath = ["."]
 
 [tool.uv]
 no-build-isolation-package = ["torchpcl"]

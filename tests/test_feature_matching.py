@@ -3,19 +3,19 @@ import torch
 import torchpcl as tp
 
 
-def test_match_features_returns_mutual_point_rows(device):
+def test_match_features_returns_mutual_point_rows(search_device):
     source = tp.PointCloud.from_points(
-        torch.randn(4, 3, device=device),
+        torch.randn(4, 3, device=search_device),
         features=torch.tensor(
             [[0.0, 0.0], [1.0, 0.0], [3.0, 0.0], [8.0, 0.0]],
-            device=device,
+            device=search_device,
         ),
     )
     target = tp.PointCloud.from_points(
-        torch.randn(3, 3, device=device),
+        torch.randn(3, 3, device=search_device),
         features=torch.tensor(
             [[1.1, 0.0], [0.1, 0.0], [8.2, 0.0]],
-            device=device,
+            device=search_device,
         ),
     )
 
@@ -25,22 +25,22 @@ def test_match_features_returns_mutual_point_rows(device):
     assert result.target_indices.tolist() == [1, 0, 2]
     assert torch.allclose(
         result.distances2,
-        torch.tensor([0.01, 0.01, 0.04], device=device),
+        torch.tensor([0.01, 0.01, 0.04], device=search_device),
         atol=1e-6,
     )
 
 
-def test_match_features_matches_dense_search_for_float64(device):
+def test_match_features_matches_dense_search_for_float64(search_device):
     generator = torch.Generator().manual_seed(4)
     source_features = torch.randn(7, 5, generator=generator, dtype=torch.float64)
     target_features = torch.randn(6, 5, generator=generator, dtype=torch.float64)
     source = tp.PointCloud.from_points(
-        torch.randn(7, 3, generator=generator).to(device),
-        features=source_features.to(device),
+        torch.randn(7, 3, generator=generator).to(search_device),
+        features=source_features.to(search_device),
     )
     target = tp.PointCloud.from_points(
-        torch.randn(6, 3, generator=generator).to(device),
-        features=target_features.to(device),
+        torch.randn(6, 3, generator=generator).to(search_device),
+        features=target_features.to(search_device),
     )
 
     result = tp.match_features(source, target, mutual=False)

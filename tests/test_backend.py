@@ -6,13 +6,6 @@ import torch
 from torchpcl import _C
 
 
-def backend_devices():
-    devices = [torch.device("cpu")]
-    if torch.cuda.is_available() and _C.has_cuda():
-        devices.append(torch.device("cuda"))
-    return devices
-
-
 def _selected_distances(points, queries, indices):
     valid = indices >= 0
     gathered = points[indices.to(torch.int64).clamp(min=0)]
@@ -20,11 +13,10 @@ def _selected_distances(points, queries, indices):
     return distances.masked_fill(~valid, torch.inf).sort(dim=1).values
 
 
-@pytest.mark.parametrize("device", backend_devices())
-def test_bvh_knn_selects_reference_topk(device):
+def test_bvh_knn_selects_reference_topk(search_device):
     generator = torch.Generator(device="cpu").manual_seed(7)
-    points = torch.rand(37, 3, generator=generator).to(device)
-    queries = torch.rand(9, 3, generator=generator).to(device)
+    points = torch.rand(37, 3, generator=generator).to(search_device)
+    queries = torch.rand(9, 3, generator=generator).to(search_device)
 
     indices, distances = _C.BvhIndex(points).knn(queries, 5, math.inf)
     expected = torch.cdist(queries, points).square().topk(
@@ -38,17 +30,16 @@ def test_bvh_knn_selects_reference_topk(device):
     )
 
 
-@pytest.mark.parametrize("device", backend_devices())
-def test_packed_knn_is_batch_isolated(device):
+def test_packed_knn_is_batch_isolated(search_device):
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
-        device=device,
+        device=search_device,
     )
-    offsets = torch.tensor([0, 2, 3], device=device)
+    offsets = torch.tensor([0, 2, 3], device=search_device)
     queries = torch.tensor(
-        [[1.9, 0.0, 0.0], [10.1, 0.0, 0.0]], device=device
+        [[1.9, 0.0, 0.0], [10.1, 0.0, 0.0]], device=search_device
     )
-    query_batch_ids = torch.tensor([0, 1], device=device)
+    query_batch_ids = torch.tensor([0, 1], device=search_device)
 
     indices, _ = _C.packed_knn(
         points, offsets, queries, query_batch_ids, 2, math.inf
@@ -59,14 +50,13 @@ def test_packed_knn_is_batch_isolated(device):
     assert indices[1].tolist().count(-1) == 1
 
 
-@pytest.mark.parametrize("device", backend_devices())
-def test_packed_knn_empty_reference_batch_is_invalid(device):
-    points = torch.tensor([[10.0, 0.0, 0.0]], device=device)
-    offsets = torch.tensor([0, 0, 1], device=device)
+def test_packed_knn_empty_reference_batch_is_invalid(search_device):
+    points = torch.tensor([[10.0, 0.0, 0.0]], device=search_device)
+    offsets = torch.tensor([0, 0, 1], device=search_device)
     queries = torch.tensor(
-        [[0.0, 0.0, 0.0], [10.1, 0.0, 0.0]], device=device
+        [[0.0, 0.0, 0.0], [10.1, 0.0, 0.0]], device=search_device
     )
-    query_batch_ids = torch.tensor([0, 1], device=device)
+    query_batch_ids = torch.tensor([0, 1], device=search_device)
 
     indices, _ = _C.packed_knn(
         points, offsets, queries, query_batch_ids, 2, math.inf
@@ -76,16 +66,17 @@ def test_packed_knn_empty_reference_batch_is_invalid(device):
     assert 0 in indices[1].tolist()
 
 
-@pytest.mark.parametrize("device", backend_devices())
-def test_native_radius_boundary_and_empty_queries(device):
-    points = torch.zeros(1, 3, device=device)
+def test_native_radius_boundary_and_empty_queries(search_device):
+    points = torch.zeros(1, 3, device=search_device)
     index = _C.BvhIndex(points)
     queries = torch.tensor(
-        [[0.0999, 0.0, 0.0], [0.1001, 0.0, 0.0]], device=device
+        [[0.0999, 0.0, 0.0], [0.1001, 0.0, 0.0]], device=search_device
     )
 
     indices, _ = index.knn(queries, 1, 0.1)
-    empty_indices, empty_distances = index.knn(torch.empty(0, 3, device=device), 3, 1.0)
+    empty_indices, empty_distances = index.knn(
+        torch.empty(0, 3, device=search_device), 3, 1.0
+    )
 
     assert indices[:, 0].tolist() == [0, -1]
     assert empty_indices.shape == empty_distances.shape == (0, 3)

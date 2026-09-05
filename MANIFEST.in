@@ -1,5 +1,4 @@
 include LICENSE
-include MIGRATION.md
 include README.md
 include third_party/cuBQL/LICENSE
 recursive-include docs *.md

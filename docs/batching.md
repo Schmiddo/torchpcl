@@ -51,6 +51,8 @@ padded tensors with `PointCloud.from_padded` first.
 
 - `transform`, `voxelize`, search, normals, metrics, and registration share the
   same offsets convention.
+- `farthest_point_sample` is the exception: it requires a single cloud
+  (batch size one) and raises `ValueError` for a batched input.
 - `procrustes` pairs source and target points by packed row and therefore
   requires matching lengths in each batch entry.
 - Voxel keys include batch identity, so points from different clouds never

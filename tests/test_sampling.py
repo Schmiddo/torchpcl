@@ -4,9 +4,11 @@ import torch
 import torchpcl as tp
 
 
-def test_farthest_point_sample_exact_sequence_on_a_line(device):
+def test_farthest_point_sample_exact_sequence_on_a_line(search_device):
     points = torch.tensor(
-        [[float(i), 0.0, 0.0] for i in range(6)], dtype=torch.float64, device=device
+        [[float(i), 0.0, 0.0] for i in range(6)],
+        dtype=torch.float64,
+        device=search_device,
     )
 
     result = tp.farthest_point_sample(points, 4)
@@ -32,18 +34,20 @@ def test_farthest_point_sample_clamps_to_all_points(device):
     assert result.points.tolist() == points.tolist()
 
 
-def test_farthest_point_sample_preserves_normals_and_features(device):
+def test_farthest_point_sample_preserves_normals_and_features(search_device):
     points = torch.tensor(
-        [[float(i), 0.0, 0.0] for i in range(6)], dtype=torch.float64, device=device
+        [[float(i), 0.0, 0.0] for i in range(6)],
+        dtype=torch.float64,
+        device=search_device,
     )
-    normals = torch.zeros(6, 3, dtype=torch.float64, device=device)
+    normals = torch.zeros(6, 3, dtype=torch.float64, device=search_device)
     normals[:, 2] = 1.0
-    features = torch.arange(12, dtype=torch.float64, device=device).reshape(6, 2)
+    features = torch.arange(12, dtype=torch.float64, device=search_device).reshape(6, 2)
     cloud = tp.PointCloud.from_points(points, normals=normals, features=features)
 
     result = tp.farthest_point_sample(cloud, 4)
 
-    selected = torch.tensor([0, 5, 2, 1], device=device)
+    selected = torch.tensor([0, 5, 2, 1], device=search_device)
     assert result.normals.tolist() == normals[selected].tolist()
     assert result.features.tolist() == features[selected].tolist()
 
