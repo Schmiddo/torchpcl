@@ -48,3 +48,15 @@ def test_match_features_matches_dense_search_for_float64(device):
 
     assert torch.equal(result.target_indices, dense.argmin(dim=1))
     assert torch.allclose(result.distances2, dense.min(dim=1).values)
+
+
+def test_cpu_feature_matching_matches_dense_for_fpfh_dimension():
+    source_features = torch.randn(73, 33)
+    target_features = torch.randn(61, 33)
+    source = tp.PointCloud.from_points(torch.randn(73, 3), features=source_features)
+    target = tp.PointCloud.from_points(torch.randn(61, 3), features=target_features)
+    result = tp.match_features(source, target, mutual=False)
+    dense = torch.cdist(source_features, target_features).square()
+
+    assert torch.equal(result.target_indices, dense.argmin(dim=1))
+    assert torch.allclose(result.distances2, dense.min(dim=1).values, atol=1e-4)

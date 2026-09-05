@@ -70,9 +70,9 @@ def match_features(
 ) -> CorrespondenceSet:
     """Match point-aligned features using exact squared L2 distance.
 
-    This MVP implementation supports one source and target cloud. The exact
-    brute-force search streams over candidates without materializing the full
-    descriptor distance matrix.
+    This implementation supports one source and target cloud. The exact
+    exhaustive search uses bounded query blocks, avoiding a full descriptor
+    distance matrix.
     """
     if not isinstance(source, PointCloud) or not isinstance(target, PointCloud):
         raise TypeError("source and target must be PointCloud objects")
