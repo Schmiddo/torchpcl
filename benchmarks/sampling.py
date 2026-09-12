@@ -29,9 +29,11 @@ def parse_args(argv=None):
     parser.add_argument("--num-points", type=positive_int, default=200_000)
     parser.add_argument("--num-samples", type=positive_int, default=5_000)
     parser.add_argument("--device", choices=["all", "cpu", "cuda"], default="all",
-                        help="torchpcl device(s); Open3D FPS is legacy CPU-only")
+                        help="device(s) for torchpcl and Open3D's tensor API; "
+                             "Open3D's legacy API is CPU-only")
     parser.add_argument("--dtype", choices=["float32", "float64"], default="float32",
-                        help="point precision (default: float32); Open3D FPS is legacy float64")
+                        help="point precision (default: float32); "
+                             "Open3D's legacy API always computes in float64")
     parser.add_argument("--repeats", type=positive_int, default=5)
     parser.add_argument("--warmup", type=positive_int, default=1)
     parser.add_argument("--threads", type=positive_int, default=default_threads(),
@@ -57,8 +59,11 @@ def main(argv=None):
     cuda_available = torch.cuda.is_available() and _C.has_cuda()
     try:
         devices, skipped = select_devices(args.device, cuda_available)
+        tensor_devices, tensor_skipped = select_devices(
+            args.device, o3d.core.cuda.is_available(), backend="open3d-tensor")
     except ValueError as error:
         raise SystemExit(str(error)) from error
+    skipped = skipped + tensor_skipped
 
     config = SamplingConfig(num_points=args.num_points, num_samples=args.num_samples,
                              dtype=args.dtype, seed=args.seed)
@@ -70,19 +75,24 @@ def main(argv=None):
             "num_points": config.num_points, "num_samples": config.num_samples,
             "dtype": config.dtype, "seed": config.seed, "threads": args.threads,
             "repeats": args.repeats, "warmup": args.warmup, "devices": devices,
+            "open3d_tensor_devices": tensor_devices,
         },
         "skipped": skipped,
         "results": [],
     }
     print(f"Points: {args.num_points}; samples: {args.num_samples}; dtype: {args.dtype}; "
           f"torchpcl: {', '.join(devices)}; threads: {args.threads}")
-    print("Open3D farthest_point_down_sample: legacy CPU/float64 reference only.")
+    print(f"Open3D farthest_point_down_sample: tensor API on {', '.join(tensor_devices)}; "
+          f"legacy API on cpu/float64.")
     for skip in skipped:
         print(f"Skipped {skip['backend']}/{skip['device']}: {skip['reason']}")
     print(f"{'backend/device':24} {'median ms':>10} {'min ms':>10} "
           f"{'RAM MiB':>10} {'VRAM MiB':>10}")
 
-    for backend, device in ([("torchpcl", d) for d in devices] + [("open3d", "cpu")]):
+    cases = ([("torchpcl", device) for device in devices]
+             + [("open3d-tensor", device) for device in tensor_devices]
+             + [("open3d-legacy", "cpu")])
+    for backend, device in cases:
         case = make_case(prepared, backend, device)
         result = measure(case, repeats=args.repeats, warmup=args.warmup)
         report["results"].append(result)

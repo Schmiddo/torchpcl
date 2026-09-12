@@ -7,6 +7,8 @@ import pytest
 
 from benchmarks.registration_cases import PreparedPair, RegistrationConfig, make_case
 from benchmarks.runner import measure
+from benchmarks.sampling_cases import SamplingConfig, prepare_cloud
+from benchmarks.sampling_cases import make_case as make_sampling_case
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
@@ -44,3 +46,23 @@ def test_open3d_icp_uses_tensor_inputs(monkeypatch, dtype, device):
     assert report["median"]["source_displacement_rmse"] < 1e-5
     assert report["input_dtype"] == dtype
     assert report["device"] == device
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_open3d_tensor_fps_runs_on_requested_device(device):
+    o3d = pytest.importorskip("open3d")
+    if device == "cuda" and not o3d.core.cuda.is_available():
+        pytest.skip("Open3D CUDA unavailable")
+    prepared = prepare_cloud(SamplingConfig(num_points=256, num_samples=16))
+    positions = make_sampling_case(prepared, "open3d-tensor", device).run_synchronized()
+    positions = positions.point.positions
+    assert str(positions.device) == device.upper() + ":0"
+    assert positions.dtype == o3d.core.Dtype.Float32
+    assert len(positions) == 16
+
+
+def test_open3d_legacy_fps_is_cpu_only():
+    pytest.importorskip("open3d")
+    prepared = prepare_cloud(SamplingConfig(num_points=256, num_samples=16))
+    with pytest.raises(ValueError, match="CPU only"):
+        make_sampling_case(prepared, "open3d-legacy", "cuda")

@@ -124,10 +124,21 @@ needed). Uses the same benchmark environment as above:
 .venv-benchmark/bin/python benchmarks/sampling.py --device cpu --dtype float64
 ```
 
-Both backends select the same start index (0) on an identical, dtype-quantized
-input, so their outputs are directly comparable. Open3D's
-`farthest_point_down_sample` is a legacy CPU/float64-only API (`reference_only:
-true` in JSON); torchpcl runs on `--device`'s selected device(s) and dtype.
+All backends select the same start index (0) on an identical, dtype-quantized
+input, so their outputs are directly comparable.
+
+Open3D exposes `farthest_point_down_sample` twice, and the two differ by more
+than an order of magnitude, so both are benchmarked as separate backends:
+
+- `open3d-tensor` — `t.geometry.PointCloud`, which runs on CPU and CUDA at the
+  requested dtype. This is the matched comparison against torchpcl.
+- `open3d-legacy` — `geometry.PointCloud`, CPU-only and always computing in
+  float64 whatever `--dtype` requests. Despite that, it is currently the faster
+  of the two on CPU.
+
+torchpcl and `open3d-tensor` run on `--device`'s selected device(s); Open3D
+CUDA availability is resolved separately from torchpcl's and skipped
+independently. Each result records `input_dtype` and `compute_dtype`.
 Timing excludes input construction; there is one untimed warmup, five measured
 repetitions by default, and one additional untimed call for peak RAM/VRAM
 (see "What is measured" above for the memory-sampling methodology, which this

@@ -52,20 +52,31 @@ def prepare_cloud(config: SamplingConfig) -> PreparedCloud:
     return PreparedCloud(config, points)
 
 
+BACKENDS = ("torchpcl", "open3d-tensor", "open3d-legacy")
+
+
 def make_case(prepared: PreparedCloud, backend: str, device: str = "cpu") -> Case:
-    """Allocate inputs once and return an independently reusable case."""
-    if backend not in ("torchpcl", "open3d"):
-        raise ValueError("backend must be torchpcl or open3d")
+    """Allocate inputs once and return an independently reusable case.
+
+    Open3D exposes farthest-point downsampling twice: on the legacy
+    ``geometry.PointCloud`` (CPU/float64 only) and on the tensor
+    ``t.geometry.PointCloud`` (CPU and CUDA, honoring ``config.dtype``). They
+    are separate backends because their runtimes differ by more than an order
+    of magnitude, so neither one alone represents Open3D.
+    """
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {', '.join(BACKENDS)}")
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
-    if backend == "open3d" and device != "cpu":
-        raise ValueError("Open3D farthest_point_down_sample supports CPU only")
+    if backend == "open3d-legacy" and device != "cpu":
+        raise ValueError("Open3D's legacy farthest_point_down_sample supports CPU only")
     config = prepared.config
 
     def synchronize():
         pass
 
     device_memory_reader = None
+    compute_dtype = config.dtype
 
     if backend == "torchpcl":
         import torch
@@ -79,9 +90,24 @@ def make_case(prepared: PreparedCloud, backend: str, device: str = "cpu") -> Cas
 
         def run():
             return tp.farthest_point_sample(points, config.num_samples)
+    elif backend == "open3d-tensor":
+        import open3d as o3d
+        import open3d.core as o3c
+
+        if device == "cuda":
+            synchronize = o3c.cuda.synchronize
+            device_memory_reader = cuda_process_memory_reader()
+        o3d_device = o3c.Device("CUDA:0" if device == "cuda" else "CPU:0")
+        cloud = o3d.t.geometry.PointCloud(
+            o3c.Tensor(prepared.points.astype(config.dtype), device=o3d_device))
+
+        def run():
+            return cloud.farthest_point_down_sample(config.num_samples)
     else:
+        # Vector3dVector stores float64 whatever the configured input dtype is.
         import open3d as o3d
 
+        compute_dtype = "float64"
         cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(prepared.points))
 
         def run():
@@ -90,12 +116,8 @@ def make_case(prepared: PreparedCloud, backend: str, device: str = "cpu") -> Cas
     return Case(
         name="farthest_point_sample", backend=backend, device=device,
         run=run, synchronize=synchronize, device_memory_reader=device_memory_reader,
-        metadata={
-            "input_dtype": config.dtype,
-            "compute_dtype": config.dtype if backend == "torchpcl" else "float64",
-            "reference_only": backend == "open3d",
-        },
+        metadata={"input_dtype": config.dtype, "compute_dtype": compute_dtype},
     )
 
 
-__all__ = ["SamplingConfig", "PreparedCloud", "prepare_cloud", "make_case"]
+__all__ = ["BACKENDS", "SamplingConfig", "PreparedCloud", "prepare_cloud", "make_case"]
