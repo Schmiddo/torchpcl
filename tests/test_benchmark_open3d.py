@@ -42,7 +42,6 @@ def test_open3d_icp_uses_tensor_inputs(monkeypatch, dtype, device):
     # One timed execution and one separate peak-memory execution.
     assert calls == [True, True]
     assert report["implementation"] == "tensor"
-    assert not report["reference_only"]
     assert report["median"]["source_displacement_rmse"] < 1e-5
     assert report["input_dtype"] == dtype
     assert report["device"] == device

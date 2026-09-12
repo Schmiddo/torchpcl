@@ -215,7 +215,6 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
                               else "float64"),
             "implementation": "tensor" if backend == "open3d" and method == "icp" else
                               "legacy" if backend == "open3d" else "torchpcl",
-            "reference_only": backend == "open3d" and method == "fgr",
             "transform_dtype": "float64" if backend == "open3d" else config.dtype,
         },
     )

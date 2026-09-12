@@ -70,12 +70,13 @@ Unavailable CUDA is skipped per library in the console and JSON; an explicit
 CPU runs use the physical core count by default; pass `--threads 1` for
 single-thread measurements.
 
-Open3D FGR has no tensor/CUDA implementation in the installed API. It is retained
-as a **CPU/float64 reference only**, with `reference_only: true` in JSON; its
-runtime is not a matched-device/precision comparison with torchpcl's float32 FGR.
-JSON records implementation, device, input and compute precision, and transform
-precision. Tensor ICP with float32 points is labeled mixed computation because
-of its float64 pose solver. Use `--dtype float64` for double-precision inputs.
+Open3D FGR has no tensor/CUDA implementation in the installed API, so it runs
+**CPU/float64 only**: its runtime is not a matched-device/precision comparison
+with torchpcl's float32 FGR. JSON records implementation (`tensor`, `legacy`,
+or `torchpcl`), device, input and compute precision, and transform precision;
+read those together to see which rows are directly comparable. Tensor ICP with
+float32 points is labeled mixed computation because of its float64 pose solver.
+Use `--dtype float64` for double-precision inputs.
 Repetitions reset the same
 seed to measure runtime variability; use separate `--seed` runs to assess FGR
 robustness.
