@@ -79,7 +79,8 @@ def main(argv=None):
     print("Open3D farthest_point_down_sample: legacy CPU/float64 reference only.")
     for skip in skipped:
         print(f"Skipped {skip['backend']}/{skip['device']}: {skip['reason']}")
-    print(f"{'backend/device':24} {'median ms':>10} {'RAM MiB':>10} {'VRAM MiB':>10}")
+    print(f"{'backend/device':24} {'median ms':>10} {'min ms':>10} "
+          f"{'RAM MiB':>10} {'VRAM MiB':>10}")
 
     for backend, device in ([("torchpcl", d) for d in devices] + [("open3d", "cpu")]):
         case = make_case(prepared, backend, device)
@@ -88,6 +89,7 @@ def main(argv=None):
         memory = result["memory"]
         device_text = format_optional(memory["device_peak_mib"])
         print(f"{backend + '/' + device:24} {result['median']['time_ms']:10.3f} "
+              f"{result['time_ms_min']:10.3f} "
               f"{memory['process_rss_peak_mib']:10.1f} {device_text:>10}", flush=True)
         del case
 

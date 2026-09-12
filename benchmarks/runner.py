@@ -12,6 +12,11 @@ def measure(case, *, repeats=5, warmup=1):
     ``case.evaluate``'s numeric fields (bools excluded) are medianed across
     repetitions; other fields (e.g. a serialized transform) are kept only in
     ``samples``. ``case.metadata`` is reported once, unmeasured.
+
+    ``time_ms_min``/``time_ms_max`` bound the measured runtimes. A median
+    alone cannot show whether two backends' runtimes actually differ, which
+    matters most on CUDA, where clock and thermal drift move repetitions far
+    more than on CPU.
     """
     if repeats < 1 or warmup < 0:
         raise ValueError("repeats must be positive and warmup nonnegative")
@@ -30,10 +35,13 @@ def measure(case, *, repeats=5, warmup=1):
         if isinstance(value, (int, float)) and not isinstance(value, bool)
     ]
     memory = sample_peak_memory(case)
+    times = [sample["time_ms"] for sample in samples]
     return {
         "name": case.name, "backend": case.backend, "device": case.device,
         **case.metadata,
         "memory": memory,
+        "time_ms_min": min(times),
+        "time_ms_max": max(times),
         "median": {key: float(median(sample[key] for sample in samples)) for key in numeric_keys},
         "samples": samples,
     }

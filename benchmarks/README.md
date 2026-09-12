@@ -80,8 +80,11 @@ Repetitions reset the same
 seed to measure runtime variability; use separate `--seed` runs to assess FGR
 robustness.
 
-The table reports medians of runtime and accuracy across repetitions, plus peak
-memory from one additional untimed registration call:
+The table reports medians of runtime and accuracy across repetitions, the
+fastest repetition, plus peak memory from one additional untimed registration
+call. JSON also records `time_ms_min`/`time_ms_max`; compare those before
+reading anything into a difference of medians, since CUDA repetitions vary with
+clock and thermal state far more than CPU ones do:
 
 - RAM is the peak resident set size of the benchmark process. VRAM is the peak
   allocation attributed by NVML to that process on the selected CUDA device.

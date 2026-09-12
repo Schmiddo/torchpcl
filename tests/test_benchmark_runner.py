@@ -56,6 +56,7 @@ def test_runner_synchronizes_and_excludes_setup_and_evaluation(monkeypatch):
     assert events == timed + (timed + ["evaluate"]) * 2
     assert [sample["time_ms"] for sample in result["samples"]] == [2000, 3000]
     assert result["median"]["time_ms"] == 2500
+    assert (result["time_ms_min"], result["time_ms_max"]) == (2000, 3000)
     assert result["device"] == "cuda"
     assert result["input_dtype"] == "float32"
     assert result["memory"]["device_peak_mib"] == 20

@@ -96,7 +96,7 @@ def main(argv=None):
         print("Open3D FGR: legacy CPU/float64 reference only; no matching tensor/CUDA API.")
     for skip in skipped:
         print(f"Skipped {skip['backend']}/{skip['device']}: {skip['reason']}")
-    print(f"{'pair/method/backend/device':48} {'median ms':>10} {'RAM MiB':>10} "
+    print(f"{'pair/method/backend/device':48} {'median ms':>10} {'min ms':>10} {'RAM MiB':>10} "
           f"{'VRAM MiB':>10} {'rot deg':>10} {'trans':>10} {'GT RMSE':>10} {'fitness':>9}")
     for directory in args.data:
         pair = prepare_pair(directory, config, with_features="fgr" in methods)
@@ -114,6 +114,7 @@ def main(argv=None):
                 device_text = format_optional(memory["device_peak_mib"])
                 label = f"{directory.name}/{method}/{backend}/{device}"
                 print(f"{label:48} {median['time_ms']:10.3f} "
+                      f"{result['time_ms_min']:10.3f} "
                       f"{memory['process_rss_peak_mib']:10.1f} {device_text:>10} "
                       f"{median['rotation_error_deg']:10.4f} "
                       f"{median['translation_error']:10.5f} {median['source_displacement_rmse']:10.5f} "
