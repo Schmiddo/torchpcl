@@ -62,38 +62,46 @@ class PreparedPair:
 
 def prepare_pair(directory: str | Path, config: RegistrationConfig, *, with_features=True):
     """Load and preprocess once; no device allocation or registration is performed."""
-    import open3d as o3d
-
     directory = Path(directory)
     expected = load_transform(directory / "T_target_source.txt")
     originals, clouds, features = [], [], []
     for name in ("source", "target"):
         path = directory / f"{name}.ply"
-        if not path.is_file():
-            raise FileNotFoundError(path)
-        original = o3d.io.read_point_cloud(str(path))
-        points = np.asarray(original.points)
-        if len(points) < 3 or not np.isfinite(points).all():
-            raise ValueError(f"{path}: expected at least three finite points")
+        original, cloud, feature = prepare_cloud(path, config, with_features=with_features)
         originals.append(original)
-        cloud = original.voxel_down_sample(config.voxel_size)
-        if len(cloud.points) < 10:
-            raise ValueError(f"{path}: fewer than 10 downsampled points; reduce voxel_size")
-        # Quantize shared inputs before promoting them to legacy Open3D's double
-        # storage. Both backends thus start from identical coordinate values.
-        cloud.points = o3d.utility.Vector3dVector(np.asarray(cloud.points).astype(config.dtype))
         clouds.append(cloud)
         if with_features:
-            cloud.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(
-                radius=2 * config.voxel_size, max_nn=30))
-            cloud.orient_normals_towards_camera_location(np.zeros(3))
-            feature = o3d.pipelines.registration.compute_fpfh_feature(
-                cloud, o3d.geometry.KDTreeSearchParamHybrid(
-                    radius=5 * config.voxel_size, max_nn=100))
-            feature.data = np.asarray(feature.data).astype(config.dtype).astype(np.float64)
             features.append(feature)
     return PreparedPair(directory, config, expected, tuple(originals), tuple(clouds),
                         tuple(features) if with_features else None)
+
+
+def prepare_cloud(path: Path, config: RegistrationConfig, *, with_features=True):
+    """Load one cloud and compute the shared, dtype-quantized benchmark inputs."""
+    import open3d as o3d
+
+    feature = None
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    original = o3d.io.read_point_cloud(str(path))
+    points = np.asarray(original.points)
+    if len(points) < 3 or not np.isfinite(points).all():
+        raise ValueError(f"{path}: expected at least three finite points")
+    cloud = original.voxel_down_sample(config.voxel_size)
+    if len(cloud.points) < 10:
+        raise ValueError(f"{path}: fewer than 10 downsampled points; reduce voxel_size")
+    # Quantize shared inputs before promoting them to legacy Open3D's double
+    # storage. Both backends thus start from identical coordinate values.
+    cloud.points = o3d.utility.Vector3dVector(np.asarray(cloud.points).astype(config.dtype))
+    if with_features:
+        cloud.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(
+            radius=2 * config.voxel_size, max_nn=30))
+        cloud.orient_normals_towards_camera_location(np.zeros(3))
+        feature = o3d.pipelines.registration.compute_fpfh_feature(
+            cloud, o3d.geometry.KDTreeSearchParamHybrid(
+                radius=5 * config.voxel_size, max_nn=100))
+        feature.data = np.asarray(feature.data).astype(config.dtype).astype(np.float64)
+    return original, cloud, feature
 
 
 def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu") -> Case:
