@@ -24,6 +24,21 @@ def test_farthest_point_sample_exact_sequence_on_a_line(search_device):
     assert result.offsets.tolist() == [0, 4]
 
 
+def test_farthest_point_sample_matches_across_devices(search_device):
+    if search_device.type == "cpu":
+        pytest.skip("compares the CUDA kernel against the CPU reference")
+    # Wide enough that the CUDA grid spans several blocks, and half-duplicated
+    # so the lower-index tie-break has to hold across block boundaries.
+    points = torch.rand(20_000, 3, dtype=torch.float64, generator=
+                        torch.Generator().manual_seed(0))
+    points[10_000:] = points[:10_000]
+
+    expected = tp.farthest_point_sample(points, 1_000).points
+    result = tp.farthest_point_sample(points.to(search_device), 1_000).points
+
+    assert torch.equal(result.cpu(), expected)
+
+
 def test_farthest_point_sample_clamps_to_all_points(device):
     points = torch.tensor(
         [[float(i), 0.0, 0.0] for i in range(6)], dtype=torch.float64, device=device
