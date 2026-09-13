@@ -194,6 +194,86 @@ repetitions by default, and one additional untimed call for peak RAM/VRAM
 (see "What is measured" above for the memory-sampling methodology, which this
 benchmark shares via `benchmarks/memory.py`).
 
+## Operation benchmarks
+
+Compare torchpcl's per-operation kernels with Open3D's tensor API on random
+clouds (no `data/` pair needed). Neighbor search is covered today; the script
+takes an `--op` selector so further operations can be added without another
+CLI:
+
+```bash
+just benchmark-operations --json results-operations.json
+just benchmark-operations --op knn --num-reference 1000000 --k 16
+just benchmark-operations --op radius --radius 0.01 --device cuda
+```
+
+Four scopes are measured, because the libraries divide the work differently:
+
+- `index-build` — `NeighborIndex(reference)` against
+  `NearestNeighborSearch(reference)` plus `knn_index()`. Open3D's constructor
+  is lazy, so both calls are inside the timed region.
+- `knn` and `radius` — queries only, against an index built during preparation.
+- `knn-build-query` — building and querying together, from raw points.
+
+**Read `knn-build-query` before the other three on CUDA.** Open3D's CUDA
+`knn_index()` returns in about 0.03 ms for a 200k-point reference, against
+55 ms for the same build on CPU: it defers the work to query time rather than
+building a structure. Its `index-build` and `knn` figures are therefore not
+comparable with torchpcl's in isolation, while the combined figure is what
+either library charges to answer a batch of queries from raw points.
+
+Both libraries return **squared** distances. Open3D's radius search is ragged
+(flat neighbors plus row splits) where torchpcl returns a fixed-width result
+capped at 64 neighbors per query, so a radius whose densest scored
+neighborhood exceeds that cap is rejected rather than silently compared
+against a truncated result. The console reports the densest neighborhood found.
+
+Preprocessing (`voxelize`, `voxelize-reduce`, `normals`,
+`statistical-outliers`, `radius-outliers`) and `fpfh` are measured by the same
+script. Their parameter mappings were established by measurement rather than
+from documentation:
+
+- Both outlier filters map their neighbor count **directly**: torchpcl's `k`
+  is Open3D's `nb_neighbors` / `nb_points`, reproducing its masks exactly,
+  despite torchpcl counting the query point among the `k`. `k`±1 disagrees, so
+  the mapping is pinned by a test.
+- torchpcl's `voxelize` returns a `Voxelization`, not a cloud; only
+  `voxelize` plus `reduce(points, "mean")` is like-for-like with Open3D's
+  `voxel_down_sample`, which it then reproduces exactly. Both are timed, so
+  the reduction's cost is visible instead of quietly omitted.
+- Normals are compared k-NN to k-NN. Open3D's optional `radius` changes its
+  result, so it is not passed.
+- FPFH uses bounded hybrid neighborhoods on both sides. Normals are estimated
+  once during preparation and handed to both backends, so only the descriptor
+  computation differs.
+
+### Accuracy gates
+
+Every case is scored, and a case scoring zero reproduces the established
+implementation exactly.
+
+Search cases are scored against a brute-force reference computed once during
+preparation over the first 1024 queries (the full cross product is too large
+to materialize at benchmark sizes). `knn` reports the largest absolute
+squared-distance error, comparing **sorted** distances because both libraries
+leave neighbor order unspecified; `radius` reports the fraction of queries
+whose neighbor count disagrees. An index build has nothing to score.
+
+Every other case is scored against Open3D's own CPU result. These report a
+**mismatch fraction** rather than a maximum, because a maximum over hundreds
+of thousands of rows is dominated by single differing neighborhoods: Open3D's
+CPU and CUDA implementations themselves disagree on roughly 0.06% of voxels
+and 0.002% of descriptors, which a max renders as a large coordinate error
+while a fraction renders it as the small disagreement it is. Normals are
+scored on unsigned alignment, since torchpcl's signs are arbitrary without
+attached normals.
+
+torchpcl selects search candidates in float32 even for float64 inputs, so
+exact agreement is not expected at `--dtype float64`. FPFH additionally
+reports `limit_reached_fraction`: a radius holding more than 64 neighbors
+means both libraries summarize a truncated neighborhood, and the run says so
+rather than letting the comparison look complete.
+
 ## Architecture
 
 Every benchmark is split into three independent layers so that adding an
@@ -206,8 +286,9 @@ operation doesn't touch the others:
   also holds `select_devices`, the shared `--device all/cpu/cuda` resolution
   used by every benchmark.
 - **Per-operation "cases" modules** (`registration_cases.py`,
-  `sampling_cases.py`, and future ones) prepare shared inputs once (loading a
-  pair, generating a random cloud, ...) and build a `Case` per
+  `sampling_cases.py`, `neighbors_cases.py`, and future ones) prepare shared
+  inputs once (loading a pair, generating a random cloud, ...) -- reusable
+  cloud generation itself lives in `inputs.py` -- and build a `Case` per
   backend/device/variant. This is the only place that knows about a specific
   operation's inputs, options, and (if any) accuracy metrics.
 - **`runner.measure`** (`runner.py`) times a `Case` with warmup/repetition and
