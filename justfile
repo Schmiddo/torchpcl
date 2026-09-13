@@ -1,16 +1,32 @@
 set positional-arguments
 
 # Run the registration benchmark in a separate Python 3.12 environment.
-benchmark *args:
-    UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/registration.py "$@"
+benchmark-registration *args:
+    CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/registration.py "$@"
 
 # Run the sampling benchmark in a separate Python 3.12 environment.
 benchmark-sampling *args:
-    UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/sampling.py "$@"
+    CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/sampling.py "$@"
 
 # Compare per-operation kernels (neighbor search) with Open3D.
 benchmark-operations *args:
     CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/operations.py "$@"
+
+# Run every comparison benchmark, saving timestamped reports into runs/.
+benchmark *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # One stamp for the whole sweep, so a run's four reports group together and
+    # sort chronologically; UTC to match the `timestamp` inside each report.
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p runs
+    just benchmark-registration --json "runs/$stamp-registration.json" "$@"
+    just benchmark-sampling --json "runs/$stamp-sampling.json" "$@"
+    just benchmark-operations --json "runs/$stamp-operations-random.json" "$@"
+    # Last, because it is the one that fails without `just download-data`.
+    just benchmark-operations --input redwood \
+        --json "runs/$stamp-operations-redwood.json" "$@"
+    echo "Reports: runs/$stamp-*.json"
 
 # Diff two saved --json reports; needs neither Open3D nor the benchmark env.
 benchmark-compare before after:

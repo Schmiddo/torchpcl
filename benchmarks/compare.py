@@ -33,10 +33,25 @@ def load(path: Path) -> dict:
         report = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"{path}: {error}") from error
-    if "results" not in report or "config" not in report:
+    if "config" not in report or not ("results" in report or "pairs" in report):
         raise SystemExit(f"{path}: not a benchmark report "
-                         "(expected 'config' and 'results')")
+                         "(expected 'config' and 'results' or 'pairs')")
     return report
+
+
+def rows(report: dict) -> dict[tuple[str, ...], dict]:
+    """Flatten a report to case key -> result.
+
+    The registration benchmark nests its rows under one entry per input pair;
+    every other script reports a flat list. Pair rows are keyed by the
+    directory name, matching the label that script prints.
+    """
+    if "results" in report:
+        return {key(result): result for result in report["results"]}
+    return {
+        (Path(pair["directory"]).name, *key(result)): result
+        for pair in report["pairs"] for result in pair["results"]
+    }
 
 
 def key(result: dict) -> tuple[str, str, str]:
@@ -90,11 +105,10 @@ def main(argv=None):
     for difference in config_differences(before, after):
         print(f"! config {difference}")
 
-    old_rows = {key(result): result for result in before["results"]}
-    new_rows = {key(result): result for result in after["results"]}
+    old_rows, new_rows = rows(before), rows(after)
     if args.backend:
-        old_rows = {k: v for k, v in old_rows.items() if k[1] == args.backend}
-        new_rows = {k: v for k, v in new_rows.items() if k[1] == args.backend}
+        old_rows = {k: v for k, v in old_rows.items() if args.backend in k}
+        new_rows = {k: v for k, v in new_rows.items() if args.backend in k}
 
     print(f"\n{'case':40} {'before ms':>10} {'after ms':>10} {'change':>9}")
     for name in sorted(old_rows.keys() & new_rows.keys()):

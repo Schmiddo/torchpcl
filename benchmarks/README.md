@@ -282,8 +282,16 @@ working tree, and the exact `command`), every tuned parameter under `config`,
 and one `results` entry per case with its median, min/max, peak memory,
 accuracy gates, and per-repeat samples.
 
+`just benchmark` runs all four comparisons — registration, sampling, and the
+operations suite on both the random and Redwood inputs — into
+`runs/<UTC timestamp>-<name>.json`. One stamp covers the sweep, so a run's
+reports group together and sort chronologically. Extra arguments reach every
+script, so only shared ones (`--repeats`, `--device`, `--dtype`) are useful
+there; reach for the individual recipes to vary anything else.
+
 ```bash
-just benchmark-operations --json runs/before.json
+just benchmark                       # full sweep
+just benchmark-operations --json runs/before.json   # or one at a time
 # ... change a kernel, rebuild both environments ...
 just benchmark-operations --json runs/after.json
 just benchmark-compare runs/before.json runs/after.json
