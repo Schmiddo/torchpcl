@@ -274,6 +274,33 @@ reports `limit_reached_fraction`: a radius holding more than 64 neighbors
 means both libraries summarize a truncated neighborhood, and the run says so
 rather than letting the comparison look complete.
 
+## Tracking progress across runs
+
+Every script takes `--json PATH`, and nothing is written without it. A report
+holds the full environment (including a UTC `timestamp`, the `revision` of the
+working tree, and the exact `command`), every tuned parameter under `config`,
+and one `results` entry per case with its median, min/max, peak memory,
+accuracy gates, and per-repeat samples.
+
+```bash
+just benchmark-operations --json runs/before.json
+# ... change a kernel, rebuild both environments ...
+just benchmark-operations --json runs/after.json
+just benchmark-compare runs/before.json runs/after.json
+```
+
+`compare.py` joins rows on name/backend/device and prints the change in median
+runtime. A row is marked `*` only when the change exceeds 2% **and** the two
+runs' measured `[min, max]` ranges are disjoint; everything else is within the
+noise a rerun of an untouched kernel reproduces. Accuracy gates that moved are
+printed under their row, so a speedup that broke a result cannot be read as a
+win. Parameters that differ between the two reports are listed as `! config`
+lines — they mean the comparison is measuring different work, not progress.
+
+A `revision` ending in `-dirty` was measured with uncommitted changes and
+cannot be reproduced from the hash. `compare.py` is pure stdlib and runs in
+the default environment; only producing a report needs Open3D.
+
 ## Architecture
 
 Every benchmark is split into three independent layers so that adding an

@@ -12,6 +12,10 @@ benchmark-sampling *args:
 benchmark-operations *args:
     CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/operations.py "$@"
 
+# Diff two saved --json reports; needs neither Open3D nor the benchmark env.
+benchmark-compare before after:
+    uv run python benchmarks/compare.py "$1" "$2"
+
 # Evaluate FGR on Redwood ground-truth fragment pairs against Open3D.
 benchmark-redwood *args:
     UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group benchmark python benchmarks/redwood.py "$@"

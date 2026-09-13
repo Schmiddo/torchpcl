@@ -8,6 +8,9 @@ import argparse
 import json
 import os
 import platform
+import subprocess
+import sys
+from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
 
@@ -55,11 +58,41 @@ def require_open3d():
     return o3d
 
 
+def source_revision() -> str | None:
+    """``git describe``-style revision of the working tree, ``None`` outside git.
+
+    Suffixed with ``-dirty`` when tracked files differ from the commit, since a
+    report measuring uncommitted kernel edits cannot be reproduced from the
+    hash alone.
+    """
+    root = Path(__file__).resolve().parents[1]
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5)
+        if head.returncode != 0:
+            return None
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    revision = head.stdout.strip()
+    return revision + "-dirty" if dirty.stdout.strip() else revision
+
+
 def environment_metadata(devices: list[str], *, open3d_version: str) -> dict:
-    """Interpreter, platform, and library versions for the JSON report."""
+    """Interpreter, platform, library versions, and run identity for the report.
+
+    ``timestamp``, ``revision`` and ``command`` are what let two saved reports be
+    ordered and attributed; `compare.py` prints them when diffing.
+    """
     import torch
 
     return {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "revision": source_revision(),
+        "command": sys.argv,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "torch": torch.__version__,
@@ -87,5 +120,6 @@ __all__ = [
     "positive_float",
     "positive_int",
     "require_open3d",
+    "source_revision",
     "write_json",
 ]
