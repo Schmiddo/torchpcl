@@ -361,3 +361,10 @@ CUDA is reported as skipped per library.
 The output includes runtime, ground-truth accuracy, peak process RAM, and
 per-process peak VRAM. See [the benchmark guide](benchmarks/README.md) for input
 format, measurement scope, additional pairs, and CUDA options.
+
+For Redwood's four scenes, run `just download-data`, then
+`just benchmark-redwood --json results-redwood.json`. This compares torchpcl
+and Open3D FGR on non-consecutive ground-truth pairs, reporting registration
+recall using `gt.log` and `gt.info`. See the
+[Redwood benchmark guide](benchmarks/README.md#redwood-registration-benchmark)
+for the evaluation scope and smoke-test options.

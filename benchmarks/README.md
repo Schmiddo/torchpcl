@@ -13,9 +13,19 @@ the repository root. Open3D needs Python 3.12 with the current dependency set;
 use a separate environment to preserve the project's default Python environment:
 
 ```bash
-UV_PROJECT_ENVIRONMENT=.venv-benchmark uv sync --python 3.12 --group benchmark
+CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark \
+    uv sync --python 3.12 --group benchmark
 .venv-benchmark/bin/python benchmarks/registration.py --json results-registration.json
 ```
+
+`CC`/`CXX` are needed because uv's managed CPython 3.12 is itself built with
+clang, so its `sysconfig` names `clang++` as the extension compiler. Without
+the override the native build fails ("The current installed version of clang++
+(0.0.0) is less than the minimum required version by CUDA 13.0"), even where
+clang is absent and PyTorch expects g++ anyway. Re-run this command after
+changing anything under `src/torchpcl/csrc/`: an editable install builds
+`_C.cpython-312-*.so` in the source tree, and the default environment's
+`uv sync --reinstall-package torchpcl` only rebuilds its own interpreter's copy.
 
 The default `data/` pair is local and is not distributed with the repository.
 Each pair directory must contain `source.ply`, `target.ply`, and
@@ -112,6 +122,45 @@ FGR solver status, point counts, effective options, and environment versions.
 A solver success flag indicates numerical completion, not correct registration.
 There are no dataset-independent accuracy pass/fail thresholds: inspect the
 ground-truth errors, especially for failed alignments with low inlier RMSE.
+
+## Redwood registration benchmark
+
+Download the four Redwood scenes and compare torchpcl FGR with Open3D FGR:
+
+```bash
+just download-data
+just benchmark-redwood --json results-redwood.json
+# Short CPU smoke test:
+just benchmark-redwood --scenes livingroom1 --device cpu --max-pairs 2 --threads 2
+```
+
+The runner expects `data/<scene>-fragments-ply/cloud_bin_<index>.ply` and
+`data/<scene>-evaluation/{gt.log,gt.info}`, as produced by the download recipe.
+Use `--data` to change the root and `--scenes` to select scenes. Each GT record
+`i j N` maps source fragment `j` into target fragment `i`; pairs with `j <= i+1`
+are excluded. Ground truth is never passed into the registration solver.
+
+This evaluates **registration recall on known overlapping GT pairs**, not
+all-pairs loop-closure detection or precision. Correctness uses the
+[Redwood reference evaluator](https://github.com/qianyizh/ElasticReconstruction/blob/master/Matlab_Toolbox/Core/mrEvaluateRegistration.m):
+form `inverse(T_gt) @ T_est`, concatenate its translation and active quaternion
+vector part into `e`, and accept `e.T @ info @ e / info[0,0] <= 0.04`.
+This preserves the reference quaternion convention, rather than replacing it
+with a rotation vector or raw cloud RMSE. Solver completion alone is not success.
+
+Both cases reuse the registration benchmark's shared voxelization/FPFH and FGR
+settings. Timing excludes preprocessing, transfers, and GT evaluation. Open3D
+is a CPU/float64 reference; `--device` selects torchpcl devices, defaulting to
+CPU and available CUDA. One warmup and one measured repeat are used per pair,
+plus the runner's separate memory-sampling call. Set `--repeats`, `--warmup`,
+`--dtype`, `--voxel-size`, `--fgr-distance`, `--fgr-iterations`, or `--seed` as needed.
+An eight-fragment cache bounds retained preprocessing data.
+
+Console output includes pair timings and success counts. JSON includes per-run
+transforms, Redwood errors, pose/fitness metrics, memory, per-scene recall, and
+aggregate recall weighted by pair count. Recall is computed separately for each
+repeat before averaging. `--max-pairs` selects the first N eligible pairs per
+scene and explicitly marks the report as a subset; use it for smoke tests only.
 
 ## Sampling benchmark
 
