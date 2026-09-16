@@ -344,12 +344,23 @@ uv sync --reinstall-package torchpcl
 
 ## Benchmarks
 
+Track operation and sampling performance without Open3D:
+
+```bash
+just benchmark-operations --json runs/operations.json
+just benchmark-sampling --json runs/sampling.json
+```
+
+Both default to torchpcl. Open3D baselines can be recorded separately and reused
+with `just benchmark-compare`; see the [benchmark guide](benchmarks/README.md).
+
+
 Compare ICP and fast global registration with Open3D using the ground-truth
 pair in `data/`:
 
 ```bash
 UV_PROJECT_ENVIRONMENT=.venv-benchmark \
-  uv run --python 3.12 --group benchmark \
+  uv run --python 3.12 --group baseline \
   python benchmarks/registration.py --json results-registration.json
 ```
 

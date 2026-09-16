@@ -6,12 +6,13 @@ from time import perf_counter
 from .memory import sample_peak_memory
 
 
-def measure(case, *, repeats=5, warmup=1):
+def measure(case, *, repeats=5, warmup=1, evaluate=True):
     """Reset outside timing; synchronize on both boundaries; evaluate afterward.
 
     ``case.evaluate``'s numeric fields (bools excluded) are medianed across
     repetitions; other fields (e.g. a serialized transform) are kept only in
-    ``samples``. ``case.metadata`` is reported once, unmeasured.
+    ``samples``. Pass ``evaluate=False`` for performance-only runs, without
+    invoking the scoring hook. ``case.metadata`` is reported once, unmeasured.
 
     ``time_ms_min``/``time_ms_max`` bound the measured runtimes. A median
     alone cannot show whether two backends' runtimes actually differ, which
@@ -29,7 +30,8 @@ def measure(case, *, repeats=5, warmup=1):
         case.synchronize()
         elapsed = 1000 * (perf_counter() - start)
         if repeat >= warmup:
-            samples.append({"time_ms": elapsed, **case.evaluate(result)})
+            metrics = case.evaluate(result) if evaluate else {}
+            samples.append({"time_ms": elapsed, **metrics})
     numeric_keys = [
         key for key, value in samples[0].items()
         if isinstance(value, (int, float)) and not isinstance(value, bool)

@@ -14,8 +14,7 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Relative movement below this is reported but never marked significant; it is
-# the floor of what repeated runs of an untouched kernel reproduce.
+# Heuristic floor for flagging movement, not a statistical significance test.
 NOISE = 0.02
 
 
@@ -24,7 +23,13 @@ def parse_args(argv=None):
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
     parser.add_argument("--backend", help="restrict to one backend (e.g. torchpcl)")
+    parser.add_argument("--before-backend", help="backend selected from the baseline report")
+    parser.add_argument("--after-backend", help="backend selected from the candidate report")
     args = parser.parse_args(argv)
+    if bool(args.before_backend) != bool(args.after_backend):
+        parser.error("--before-backend and --after-backend must be supplied together")
+    if args.backend and args.before_backend:
+        parser.error("use --backend or the before/after selectors, not both")
     return args
 
 
@@ -96,37 +101,93 @@ def describe(report: dict) -> str:
             f"{environment.get('revision') or 'no revision'}")
 
 
+def print_environment(label: str, report: dict) -> None:
+    environment = report.get("environment", {})
+    fields = ("machine", "platform", "gpu", "python", "torch", "torchpcl", "open3d")
+    details = "; ".join(f"{field}={environment[field]}" for field in fields
+                        if environment.get(field) is not None)
+    print(f"{label} environment: {details or 'unknown'}")
+
+
+def selected_rows(report: dict, backend: str) -> dict:
+    """Drop backend from matching keys only after selecting one explicitly."""
+    selected = {k[:-2] + (k[-1],): row for k, row in rows(report).items()
+                if row["backend"] == backend}
+    if not selected:
+        raise SystemExit(f"no results for backend {backend!r}")
+    return selected
+
+
+def comparison_notes(old: dict, new: dict) -> list[str]:
+    """Existing workload caveats, without inferring automatic compatibility."""
+    notes = []
+    name, device = old["name"], old["device"]
+    different_backends = old["backend"] != new["backend"]
+    if different_backends and name == "voxelize":
+        notes.append("bare voxelization excludes centroid reduction; compare voxelize-reduce")
+    if different_backends and name in ("index-build", "knn") and device == "cuda":
+        notes.append("CUDA index-build work is split differently; compare knn-build-query")
+    if different_backends and name == "radius":
+        notes.append("capped torchpcl vs unbounded Open3D radius search; sampled cap check only")
+    if "open3d-legacy" in (old["backend"], new["backend"]):
+        notes.append("Open3D legacy computes in float64")
+    for field in ("input_dtype", "compute_dtype", "transform_dtype"):
+        if old.get(field) != new.get(field):
+            notes.append(f"{field}: {old.get(field, 'unknown')} -> {new.get(field, 'unknown')}")
+    return notes
+
+
 def main(argv=None):
     args = parse_args(argv)
     before, after = load(args.before), load(args.after)
 
     print(f"before  {args.before}  {describe(before)}")
     print(f"after   {args.after}  {describe(after)}")
+    print_environment("before", before)
+    print_environment("after", after)
     for difference in config_differences(before, after):
         print(f"! config {difference}")
 
-    old_rows, new_rows = rows(before), rows(after)
+    cross_backend = args.before_backend is not None
+    if cross_backend:
+        old_rows = selected_rows(before, args.before_backend)
+        new_rows = selected_rows(after, args.after_backend)
+        print(f"Backends: {args.before_backend} -> {args.after_backend}")
+        print("Ratios require matching workloads and hardware; config differences are not validated.")
+    else:
+        old_rows, new_rows = rows(before), rows(after)
     if args.backend:
-        old_rows = {k: v for k, v in old_rows.items() if args.backend in k}
-        new_rows = {k: v for k, v in new_rows.items() if args.backend in k}
+        old_rows = {k: v for k, v in old_rows.items() if v["backend"] == args.backend}
+        new_rows = {k: v for k, v in new_rows.items() if v["backend"] == args.backend}
 
-    print(f"\n{'case':40} {'before ms':>10} {'after ms':>10} {'change':>9}")
+    column = "speedup" if cross_backend else "change"
+    print(f"\n{'case':40} {'before ms':>10} {'after ms':>10} {column:>9}")
     for name in sorted(old_rows.keys() & new_rows.keys()):
         old, new = old_rows[name], new_rows[name]
         old_ms, new_ms = old["median"]["time_ms"], new["median"]["time_ms"]
-        ratio = new_ms / old_ms - 1 if old_ms else float("nan")
-        mark = "*" if abs(ratio) > NOISE and separated(old, new) else " "
-        print(f"{'/'.join(name):40} {old_ms:10.3f} {new_ms:10.3f} "
-              f"{100 * ratio:+8.1f}%{mark}")
-        for change in metric_changes(old, new):
-            print(f"{'':40}   gate: {change}")
+        if cross_backend:
+            speedup = f"{old_ms / new_ms:.2f}x" if new_ms else "n/a"
+            print(f"{'/'.join(name):40} {old_ms:10.3f} {new_ms:10.3f} {speedup:>9}")
+            print(f"{'':40}   range ms: {old['time_ms_min']:.3f}–{old['time_ms_max']:.3f}"
+                  f" -> {new['time_ms_min']:.3f}–{new['time_ms_max']:.3f}")
+            for note in comparison_notes(old, new):
+                print(f"{'':40}   note: {note}")
+        else:
+            ratio = new_ms / old_ms - 1 if old_ms else float("nan")
+            mark = "*" if abs(ratio) > NOISE and separated(old, new) else " "
+            print(f"{'/'.join(name):40} {old_ms:10.3f} {new_ms:10.3f} "
+                  f"{100 * ratio:+8.1f}%{mark}")
+            for change in metric_changes(old, new):
+                print(f"{'':40}   gate: {change}")
 
     for name in sorted(old_rows.keys() - new_rows.keys()):
         print(f"{'/'.join(name):40} only in {args.before}")
     for name in sorted(new_rows.keys() - old_rows.keys()):
         print(f"{'/'.join(name):40} only in {args.after}")
-    print("\n* change exceeds both runs' measured spread; unmarked rows are "
-          "within noise.")
+    if cross_backend:
+        print("\nSpeedup = before / after; greater than 1 means the candidate is faster.")
+    else:
+        print("\n* change exceeds 2% and both runs' measured spread (heuristic).")
 
 
 if __name__ == "__main__":

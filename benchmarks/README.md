@@ -1,20 +1,38 @@
 # Benchmarks
 
-Compare torchpcl with Open3D, operation by operation. Every benchmark is built
-from the same `Case`/`measure` contract (see "Adding a new benchmark" below),
-so new operations can be added independently of the CLI or of each other, and
-the same cases can later back an ASV regression suite without going through
-either script's console/JSON output.
+Track torchpcl performance with operation and sampling runs in the project
+environment. Open3D is optional: measure it separately when refreshing a saved
+baseline, then compare JSON reports offline. Run commands from the repository
+root.
+
+```bash
+uv sync --group benchmark
+just benchmark-operations --json runs/operations.json
+just benchmark-sampling --json runs/sampling.json
+just benchmark  # timestamped random operation and sampling reports
+```
+
+The `benchmark` dependency group contains memory tooling, without Open3D or
+small-gicp. Each operation/sampling invocation selects one `--backend`, defaulting
+to `torchpcl`. Only the selected backend's device availability is checked.
+`--device all` records unavailable CUDA as skipped; explicitly requesting an
+unavailable device fails. Performance runs report time and memory without
+reference outputs or accuracy scoring. Existing correctness helpers/tests and
+registration evaluation retain their scoring behavior.
+
+Every benchmark shares the `Case`/`measure` contract described below.
+Registration and Redwood remain separate workflows requiring Open3D.
 
 ## Registration benchmarks
 
 Compare torchpcl with Open3D on pairs with a known rigid transform. Run from
 the repository root. Open3D needs Python 3.12 with the current dependency set;
-use a separate environment to preserve the project's default Python environment:
+use a separate environment to preserve the project's default Python environment.
+This is also the environment for refreshing operation/sampling Open3D baselines:
 
 ```bash
 CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark \
-    uv sync --python 3.12 --group benchmark
+    uv sync --python 3.12 --group baseline
 .venv-benchmark/bin/python benchmarks/registration.py --json results-registration.json
 ```
 
@@ -164,14 +182,19 @@ scene and explicitly marks the report as a subset; use it for smoke tests only.
 
 ## Sampling benchmark
 
-Compares `torchpcl.farthest_point_sample` with Open3D's
-`farthest_point_down_sample` on a random point cloud (no `data/` pair
-needed). Uses the same benchmark environment as above:
+Measures `torchpcl.farthest_point_sample` or an explicitly selected Open3D
+`farthest_point_down_sample` backend on a random cloud (no dataset needed):
 
 ```bash
-.venv-benchmark/bin/python benchmarks/sampling.py --json results-sampling.json
-.venv-benchmark/bin/python benchmarks/sampling.py --num-points 1000000 --num-samples 20000
-.venv-benchmark/bin/python benchmarks/sampling.py --device cpu --dtype float64
+just benchmark-sampling --json runs/sampling.json
+just benchmark-sampling --num-points 1000000 --num-samples 20000
+just benchmark-sampling --device cpu --dtype float64
+
+# Optional baselines, after setting up the baseline environment above:
+.venv-benchmark/bin/python benchmarks/sampling.py \
+    --backend open3d-tensor --json runs/sampling-open3d-tensor.json
+.venv-benchmark/bin/python benchmarks/sampling.py \
+    --backend open3d-legacy --device cpu --json runs/sampling-open3d-legacy.json
 ```
 
 All backends select the same start index (0) on an identical, dtype-quantized
@@ -187,8 +210,9 @@ than an order of magnitude, so both are benchmarked as separate backends:
   of the two on CPU.
 
 torchpcl and `open3d-tensor` run on `--device`'s selected device(s); Open3D
-CUDA availability is resolved separately from torchpcl's and skipped
-independently. Each result records `input_dtype` and `compute_dtype`.
+CUDA availability is checked only when that backend is selected. The legacy
+backend rejects an explicit CUDA request and records CUDA as unsupported for
+`--device all`. Each result records `input_dtype` and `compute_dtype`.
 Timing excludes input construction; there is one untimed warmup, five measured
 repetitions by default, and one additional untimed call for peak RAM/VRAM
 (see "What is measured" above for the memory-sampling methodology, which this
@@ -196,15 +220,15 @@ benchmark shares via `benchmarks/memory.py`).
 
 ## Operation benchmarks
 
-Compare torchpcl's per-operation kernels with Open3D's tensor API on random
-clouds (no `data/` pair needed). Neighbor search is covered today; the script
-takes an `--op` selector so further operations can be added without another
-CLI:
+Measure neighbor search, preprocessing or FPFH with `--op`, defaulting to all
+operations. Use the same arguments when recording an Open3D baseline:
 
 ```bash
-just benchmark-operations --json results-operations.json
+just benchmark-operations --json runs/operations.json
 just benchmark-operations --op knn --num-reference 1000000 --k 16
 just benchmark-operations --op radius --radius 0.01 --device cuda
+.venv-benchmark/bin/python benchmarks/operations.py \
+    --backend open3d --json runs/operations-open3d.json
 ```
 
 Four scopes are measured, because the libraries divide the work differently:
@@ -224,9 +248,10 @@ either library charges to answer a batch of queries from raw points.
 
 Both libraries return **squared** distances. Open3D's radius search is ragged
 (flat neighbors plus row splits) where torchpcl returns a fixed-width result
-capped at 64 neighbors per query, so a radius whose densest scored
-neighborhood exceeds that cap is rejected rather than silently compared
-against a truncated result. The console reports the densest neighborhood found.
+capped at 64 neighbors per query. A radius whose densest sampled neighborhood
+exceeds that cap is rejected. The console reports the sampled maximum; this
+check over at most 1,024 queries does not prove all neighborhoods are untruncated.
+Capped and unbounded timings remain contextual comparisons.
 
 Preprocessing (`voxelize`, `voxelize-reduce`, `normals`,
 `statistical-outliers`, `radius-outliers`) and `fpfh` are measured by the same
@@ -243,71 +268,100 @@ from documentation:
   the reduction's cost is visible instead of quietly omitted.
 - Normals are compared k-NN to k-NN. Open3D's optional `radius` changes its
   result, so it is not passed.
-- FPFH uses bounded hybrid neighborhoods on both sides. Normals are estimated
-  once during preparation and handed to both backends, so only the descriptor
-  computation differs.
+- FPFH uses bounded hybrid neighborhoods on both sides. Identical input normals
+  are handed to both backends, so only descriptor computation is timed.
 
-### Accuracy gates
+### Points and FPFH normals
 
-Every case is scored, and a case scoring zero reproduces the established
-implementation exactly.
+Random inputs are seeded and quantized to the requested dtype. `--input redwood`
+reads points and optional normals together with `torchpcl.load_ply` (backed by
+`plyfile`), without Open3D. Use `--fragment PATH` to select a
+cloud after downloading data with `just download-data`.
 
-Search cases are scored against a brute-force reference computed once during
-preparation over the first 1024 queries (the full cross product is too large
-to materialize at benchmark sizes). `knn` reports the largest absolute
-squared-distance error, comparing **sorted** distances because both libraries
-leave neighbor order unspecified; `radius` reports the fraction of queries
-whose neighbor count disagrees. An index build has nothing to score.
+FPFH needs shared normals, supplied in this order:
 
-Every other case is scored against Open3D's own CPU result. These report a
-**mismatch fraction** rather than a maximum, because a maximum over hundreds
-of thousands of rows is dominated by single differing neighborhoods: Open3D's
-CPU and CUDA implementations themselves disagree on roughly 0.06% of voxels
-and 0.002% of descriptors, which a max renders as a large coordinate error
-while a fraction renders it as the small disagreement it is. Normals are
-scored on unsigned alignment, since torchpcl's signs are arbitrary without
-attached normals.
+1. `--normals PATH.npy`: an `(N, 3)` array in the same order as the input points.
+2. For PLY input, the file's `nx/ny/nz` properties.
+3. For random input, synthetic unit normals from a separate seeded stream.
 
-torchpcl selects search candidates in float32 even for float64 inputs, so
-exact agreement is not expected at `--dtype float64`. FPFH additionally
-reports `limit_reached_fraction`: a radius holding more than 64 neighbors
-means both libraries summarize a truncated neighborhood, and the run says so
-rather than letting the comparison look complete.
+Normals must be finite and nonzero and match the points' shape. A PLY without
+valid normals needs an explicit normals array for FPFH; other operations do not.
+Loading and dtype conversion are outside timing. The report records the normals
+source and seed/path. Synthetic normals are performance inputs, not estimated
+surface normals. **Refresh old FPFH baselines:** the earlier benchmark estimated
+normals with Open3D, so its workload differs. To preserve an old workload,
+supply its normals explicitly to both backend runs.
+
+```bash
+just benchmark-operations --input redwood --op knn
+just benchmark-operations --input redwood --op fpfh --normals data/normals.npy
+```
+
+Performance runs do not compute Open3D reference outputs or call scoring hooks.
+Neighbor preparation still computes its existing brute-force sample for the
+radius-cap guard. Correctness tests and reference helpers are retained; their
+migration out of the benchmark harness is a separate follow-up.
 
 ## Tracking progress across runs
 
-Every script takes `--json PATH`, and nothing is written without it. A report
-holds the full environment (including a UTC `timestamp`, the `revision` of the
-working tree, and the exact `command`), every tuned parameter under `config`,
-and one `results` entry per case with its median, min/max, peak memory,
-accuracy gates, and per-repeat samples.
+Each script accepts `--json PATH`. Operation/sampling reports preserve the
+existing format: environment (timestamp, revision, command, available versions,
+machine/platform/GPU), configuration, and rows with median, min/max, memory and
+per-repeat timings. Their performance samples contain no accuracy scores.
+Registration/Redwood reports continue to include their quality measurements.
 
-`just benchmark` runs all four comparisons — registration, sampling, and the
-operations suite on both the random and Redwood inputs — into
-`runs/<UTC timestamp>-<name>.json`. One stamp covers the sweep, so a run's
-reports group together and sort chronologically. Extra arguments reach every
-script, so only shared ones (`--repeats`, `--device`, `--dtype`) are useful
-there; reach for the individual recipes to vary anything else.
+`just benchmark` saves the random operation and sampling reports under
+`runs/<UTC timestamp>-<name>.json`. Extra arguments reach both scripts, so use
+shared options such as `--repeats`, `--warmup`, `--threads`, `--device`, or
+`--dtype`; use individual recipes for operation-specific options. Real-data
+operations, registration and Redwood are explicit runs.
 
 ```bash
-just benchmark                       # full sweep
-just benchmark-operations --json runs/before.json   # or one at a time
-# ... change a kernel, rebuild both environments ...
+just benchmark-operations --json runs/before.json
+# Change a kernel and rebuild the project environment's native extension:
+uv sync --group benchmark --reinstall-package torchpcl
 just benchmark-operations --json runs/after.json
 just benchmark-compare runs/before.json runs/after.json
+
+# Reuse a separately recorded Open3D baseline:
+just benchmark-compare runs/operations-open3d.json runs/after.json \
+    --before-backend open3d --after-backend torchpcl
 ```
 
-`compare.py` joins rows on name/backend/device and prints the change in median
-runtime. A row is marked `*` only when the change exceeds 2% **and** the two
-runs' measured `[min, max]` ranges are disjoint; everything else is within the
-noise a rerun of an untouched kernel reproduces. Accuracy gates that moved are
-printed under their row, so a speedup that broke a result cannot be read as a
-win. Parameters that differ between the two reports are listed as `! config`
-lines — they mean the comparison is measuring different work, not progress.
+A baseline is just a retained JSON report. There is no automatic lookup or
+refresh, and no competitor installation is needed to compare it. Refresh in
+the Open3D environment only when needed; the torchpcl development loop need not
+rebuild that environment. Keep reports in ignored `runs/` or copy them elsewhere.
 
-A `revision` ending in `-dirty` was measured with uncommitted changes and
-cannot be reproduced from the hash. `compare.py` is pure stdlib and runs in
-the default environment; only producing a report needs Open3D.
+Without selectors, `compare.py` matches name/backend/device and shows the
+percentage change in median runtime. `--backend NAME` restricts both reports.
+With paired `--before-backend` / `--after-backend` selectors, it matches the
+selected rows by operation/device and prints baseline/candidate speedup and
+both measured ranges. A speedup above 1 means the candidate was faster. Rows
+present only in one report remain visible. Existing registration reports remain
+readable in history mode.
+
+The comparison prints available environment provenance and `! config`
+differences; it does not validate compatibility. Choose matching inputs,
+parameters, threads and hardware yourself. An expected backend change differs
+from a changed workload; missing provenance in old reports remains unknown.
+Point/normal files must also have unchanged content, not just matching paths.
+The printed notes call out unequal work such as bare voxelization, CUDA
+index-build splits, capped radius queries and legacy precision. Such ratios
+are contextual timings, not equivalent-work speedups.
+
+History rows get `*` when the change exceeds 2% and both measured ranges are
+disjoint. This is a heuristic, not statistical significance; an unmarked row
+does not prove absence of regression. Old reports' changed accuracy metrics
+remain visible in history mode. A `-dirty` revision cannot be reproduced from
+its commit hash alone.
+
+`compare.py` uses only the standard library. It can run without project
+dependencies or either backend:
+
+```bash
+python3 benchmarks/compare.py runs/before.json runs/after.json
+```
 
 ## Architecture
 
@@ -330,7 +384,9 @@ operation doesn't touch the others:
   peak-memory sampling (`memory.py`, backend-neutral). It has no knowledge of
   what a specific operation measures: it medians whatever numeric fields
   `case.evaluate()` returns (an empty dict if there's nothing to score, as for
-  sampling) and reports `case.metadata` alongside them.
+  sampling) and reports `case.metadata` alongside them. Operation/sampling CLIs
+  pass `evaluate=False` to bypass scoring; the default remains `True` for
+  registration and existing tests.
 
 The CLI scripts (`registration.py`, `sampling.py`) are thin: argument parsing,
 picking which cases to build, and console/JSON output. Shared CLI plumbing
@@ -368,7 +424,7 @@ ASV dependency or configuration is required yet.
 
 ### Adding a new benchmark
 
-To benchmark another operation (e.g. `voxelize`, `estimate_normals`, `fpfh`):
+To benchmark another operation:
 
 1. Add a `<name>_cases.py` module with a `prepare_*` function that builds
    shared, backend-independent input once, and a `make_case(prepared,
@@ -380,7 +436,7 @@ To benchmark another operation (e.g. `voxelize`, `estimate_normals`, `fpfh`):
    of the two existing scripts): parse operation-specific arguments with
    `cli.py`'s shared helpers, resolve devices with `select_devices`, build one
    `Case` per backend/device via `make_case`, and pass each to
-   `runner.measure`.
+   `runner.measure(..., evaluate=False)` for performance runs.
 3. Add a section to this README and, if useful, a `tests/test_benchmark_*.py`
    covering anything not already exercised by `test_benchmark_runner.py`/
    `test_benchmark_memory.py`.

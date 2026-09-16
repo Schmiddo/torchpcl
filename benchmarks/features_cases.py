@@ -1,12 +1,4 @@
-"""Prepare a shared cloud with normals and construct FPFH cases per backend.
-
-Both libraries compute 33-bin histograms over bounded hybrid neighborhoods
-(a radius capped at a neighbor count), which is the mode Open3D recommends on
-GPU and the only mode torchpcl offers. Normals are estimated once during
-preparation and handed to both backends, so only the descriptor computation
-differs -- the same shared-preprocessing contract the registration benchmark
-uses.
-"""
+"""FPFH cases using identical points and normals with bounded neighborhoods."""
 
 from __future__ import annotations
 
@@ -33,7 +25,6 @@ BIN_TOLERANCE = 1.0
 class FeaturesConfig:
     radius: float = 0.03
     max_neighbors: int = MAX_NEIGHBORS
-    normal_k: int = 30
     dtype: str = "float32"
 
     def __post_init__(self):
@@ -44,8 +35,6 @@ class FeaturesConfig:
         if (not isinstance(self.max_neighbors, int)
                 or not 2 <= self.max_neighbors <= MAX_NEIGHBORS):
             raise ValueError(f"max_neighbors must be in [2, {MAX_NEIGHBORS}]")
-        if not isinstance(self.normal_k, int) or self.normal_k <= 0:
-            raise ValueError("normal_k must be a positive integer")
 
 
 @dataclass
@@ -56,25 +45,19 @@ class PreparedFeatures:
     normals: np.ndarray
 
     def metadata(self):
-        return {"source": self.source, "num_points": int(self.points.shape[0]),
-                "normal_k": self.config.normal_k}
+        return {"source": self.source, "num_points": int(self.points.shape[0])}
 
 
 def prepare_features(config: FeaturesConfig, points: np.ndarray,
-                     source: str = "random") -> PreparedFeatures:
-    """Estimate normals once; both backends receive this exact array."""
-    import open3d as o3d
-    import open3d.core as o3c
-
+                     normals: np.ndarray, source: str = "random") -> PreparedFeatures:
+    """Validate and quantize the shared input normals before backend setup."""
     if points.ndim != 2 or points.shape[1] != 3:
         raise ValueError("points must have shape (N, 3)")
-    cloud = o3d.t.geometry.PointCloud(o3c.Tensor(points.astype(config.dtype)))
-    cloud.estimate_normals(max_nn=config.normal_k)
-    cloud.orient_normals_towards_camera_location(o3c.Tensor(
-        np.zeros(3, dtype=config.dtype)))
-    return PreparedFeatures(
-        config=config, source=source, points=points,
-        normals=cloud.point.normals.numpy().astype(np.float64))
+    normals = np.asarray(normals, dtype=config.dtype).astype(np.float64)
+    if (normals.shape != points.shape or not np.isfinite(normals).all()
+            or not np.any(normals != 0, axis=1).all()):
+        raise ValueError("FPFH normals must be finite, nonzero, and match points' (N, 3) shape")
+    return PreparedFeatures(config, source, points, normals)
 
 
 def _torchpcl_run(prepared, device):
@@ -84,12 +67,10 @@ def _torchpcl_run(prepared, device):
     config = prepared.config
     dtype = getattr(torch, config.dtype)
     points = torch.tensor(prepared.points, dtype=dtype, device=device)
-    cloud = tp.PointCloud(
-        points,
-        torch.tensor([0, len(points)], dtype=torch.int64, device=device),
-        torch.tensor(prepared.normals, dtype=dtype, device=device))
+    cloud = tp.PointCloud.from_points(
+        points, normals=torch.tensor(prepared.normals, dtype=dtype, device=device))
     return lambda: tp.fpfh(cloud, config.radius,
-                           max_neighbors=config.max_neighbors)
+                          max_neighbors=config.max_neighbors)
 
 
 def _open3d_run(prepared, device):
@@ -112,10 +93,7 @@ def reference_output(prepared: PreparedFeatures):
     return _open3d_run(prepared, "cpu")().numpy().astype(np.float64)
 
 
-def _make_evaluate(prepared, backend, reference):
-    if reference is None:
-        return None
-
+def _make_evaluate(backend, reference):
     def evaluate(result):
         if backend == "torchpcl":
             valid = result.valid.cpu().numpy()
@@ -156,13 +134,6 @@ def make_case(prepared: PreparedFeatures, op: str, backend: str,
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
 
-    def synchronize():
-        pass
-
-    device_memory_reader = None
-    if device == "cuda":
-        device_memory_reader = cuda_process_memory_reader()
-
     if backend == "torchpcl":
         import torch
 
@@ -176,14 +147,14 @@ def make_case(prepared: PreparedFeatures, op: str, backend: str,
         if device == "cuda":
             synchronize = o3c.cuda.synchronize
 
-    evaluate = _make_evaluate(prepared, backend, reference)
-    return Case(
-        name=op, backend=backend, device=device,
-        run=run, synchronize=synchronize,
-        device_memory_reader=device_memory_reader,
-        **({} if evaluate is None else {"evaluate": evaluate}),
-        metadata={"input_dtype": prepared.config.dtype},
-    )
+    case = Case(name=op, backend=backend, device=device, run=run,
+                metadata={"input_dtype": prepared.config.dtype})
+    if device == "cuda":
+        case.synchronize = synchronize
+        case.device_memory_reader = cuda_process_memory_reader()
+    if reference is not None:
+        case.evaluate = _make_evaluate(backend, reference)
+    return case
 
 
 __all__ = [

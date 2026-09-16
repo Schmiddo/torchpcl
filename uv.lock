@@ -1755,11 +1755,15 @@ tools = [
 ]
 
 [package.dev-dependencies]
-benchmark = [
+baseline = [
     { name = "nvidia-ml-py" },
     { name = "open3d", marker = "python_full_version < '3.13'" },
     { name = "psutil" },
     { name = "small-gicp" },
+]
+benchmark = [
+    { name = "nvidia-ml-py" },
+    { name = "psutil" },
 ]
 dev = [
     { name = "pytest" },
@@ -1776,11 +1780,15 @@ requires-dist = [
 provides-extras = ["tools"]
 
 [package.metadata.requires-dev]
-benchmark = [
+baseline = [
     { name = "nvidia-ml-py", specifier = ">=13" },
     { name = "open3d", marker = "python_full_version < '3.13'" },
     { name = "psutil", specifier = ">=7" },
     { name = "small-gicp" },
+]
+benchmark = [
+    { name = "nvidia-ml-py", specifier = ">=13" },
+    { name = "psutil", specifier = ">=7" },
 ]
 dev = [
     { name = "pytest", specifier = ">=8" },

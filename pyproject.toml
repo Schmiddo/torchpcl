@@ -43,8 +43,11 @@ dev = [
 ]
 benchmark = [
     "nvidia-ml-py>=13",
-    "open3d; python_version < '3.13'",
     "psutil>=7",
+]
+baseline = [
+    { include-group = "benchmark" },
+    "open3d; python_version < '3.13'",
     "small-gicp",
 ]
 

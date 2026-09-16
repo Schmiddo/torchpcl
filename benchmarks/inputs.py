@@ -29,15 +29,14 @@ def random_points(count: int, dtype: str, seed: int) -> np.ndarray:
     return rng.random((count, 3)).astype(dtype).astype(np.float64)
 
 
-def fragment_points(path, dtype: str) -> np.ndarray:
-    """Load one PLY fragment, quantized to `dtype` and stored float64.
+def load_fragment(path, dtype: str) -> tuple[np.ndarray, np.ndarray | None]:
+    """Load points and optional normals once, quantized to dtype, stored float64.
 
-    Real scans are surfaces: locally dense, with most of the bounding volume
-    empty. Uniform points in a cube have neither property, and a spatial index
-    is exactly the kind of structure whose ranking that difference can flip,
-    so the operation benchmarks report both.
+    Real scans have locally dense surfaces unlike uniform random points. Use
+    torchpcl's PLY loader so benchmark inputs follow the library's IO behavior.
     """
-    import open3d as o3d
+    import torch
+    import torchpcl as tp
 
     if dtype not in ("float32", "float64"):
         raise ValueError("dtype must be float32 or float64")
@@ -45,10 +44,19 @@ def fragment_points(path, dtype: str) -> np.ndarray:
     if not path.is_file():
         raise FileNotFoundError(
             f"{path}: fragment not found; run `just download-data`")
-    points = np.asarray(o3d.io.read_point_cloud(str(path)).points)
+    cloud = tp.load_ply(path, dtype=getattr(torch, dtype))
+    points = cloud.points.numpy().astype(np.float64)
     if len(points) < 3 or not np.isfinite(points).all():
         raise ValueError(f"{path}: expected at least three finite points")
-    return points.astype(dtype).astype(np.float64)
+    normals = None if cloud.normals is None else cloud.normals.numpy().astype(np.float64)
+    return points, normals
 
 
-__all__ = ["fragment_points", "random_points"]
+def random_normals(count: int, seed: int) -> np.ndarray:
+    """Synthetic unit normals from a stream independent of random_points."""
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
+    normals = rng.normal(size=(count, 3))
+    return normals / np.linalg.norm(normals, axis=1, keepdims=True)
+
+
+__all__ = ["load_fragment", "random_points", "random_normals"]

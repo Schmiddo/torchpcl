@@ -81,7 +81,7 @@ def source_revision() -> str | None:
     return revision + "-dirty" if dirty.stdout.strip() else revision
 
 
-def environment_metadata(devices: list[str], *, open3d_version: str) -> dict:
+def environment_metadata(devices: list[str], *, open3d_version: str | None = None) -> dict:
     """Interpreter, platform, library versions, and run identity for the report.
 
     ``timestamp``, ``revision`` and ``command`` are what let two saved reports be

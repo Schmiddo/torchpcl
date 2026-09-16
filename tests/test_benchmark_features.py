@@ -12,13 +12,18 @@ from benchmarks.features_cases import (
 from benchmarks.runner import measure
 
 pytest.importorskip("psutil")
-pytest.importorskip("open3d")
+o3d = pytest.importorskip("open3d")
 
 
 def _prepare(radius):
     points = (np.random.default_rng(0).random((5_000, 3))
               .astype("float32").astype(np.float64))
-    return prepare_features(FeaturesConfig(radius=radius, normal_k=30), points)
+    cloud = o3d.t.geometry.PointCloud(o3d.core.Tensor(points.astype("float32")))
+    cloud.estimate_normals(max_nn=30)
+    cloud.orient_normals_towards_camera_location(o3d.core.Tensor(
+        np.zeros(3, dtype="float32")))
+    return prepare_features(FeaturesConfig(radius=radius), points,
+                            cloud.point.normals.numpy())
 
 
 def test_fpfh_reproduces_open3d():
