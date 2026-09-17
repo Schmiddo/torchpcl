@@ -11,6 +11,8 @@ from .memory import cuda_process_memory_reader
 
 OPS = ("fpfh",)
 BACKENDS = ("torchpcl", "open3d")
+# small-gicp computes no features; it is a registration and search library.
+BACKEND_OPS = {"torchpcl": OPS, "open3d": OPS, "small-gicp": ()}
 # torchpcl's FPFH accepts at most this many neighbors per point.
 MAX_NEIGHBORS = 64
 
@@ -114,6 +116,7 @@ def make_case(prepared: PreparedFeatures, op: str, backend: str,
 
 
 __all__ = [
-    "BACKENDS", "MAX_NEIGHBORS", "OPS", "FeaturesConfig", "PreparedFeatures",
+    "BACKENDS", "BACKEND_OPS", "MAX_NEIGHBORS", "OPS", "FeaturesConfig",
+    "PreparedFeatures",
     "make_case", "prepare_features",
 ]

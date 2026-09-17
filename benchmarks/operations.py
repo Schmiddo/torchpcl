@@ -24,6 +24,8 @@ from benchmarks.cli import (
     format_optional,
     positive_int,
     require_open3d,
+    SMALL_GICP_CPU_ONLY,
+    require_small_gicp,
     write_json,
 )
 from benchmarks import features_cases as features
@@ -34,9 +36,19 @@ from benchmarks.runner import measure
 ALL_OPS = workload.ALL_OPS
 
 
+def _package_version(name):
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend", choices=["torchpcl", "open3d"], default="torchpcl")
+    parser.add_argument("--backend", choices=["torchpcl", "open3d", "small-gicp"],
+                        default="torchpcl")
     parser.add_argument("--op", choices=[*ALL_OPS, "all"], default="all")
     workload.add_arguments(parser)
     parser.add_argument("--device", choices=["all", "cpu", "cuda"], default="all")
@@ -70,6 +82,7 @@ def main(argv=None):
     args = parse_args(argv)
     configure_threads(args.threads)
     o3d = require_open3d() if args.backend == "open3d" else None
+    gicp = require_small_gicp() if args.backend == "small-gicp" else None
     import torch
 
     torch.set_num_threads(args.threads)
@@ -77,14 +90,34 @@ def main(argv=None):
         from torchpcl import _C
 
         cuda_available = torch.cuda.is_available() and _C.has_cuda()
+    elif args.backend == "small-gicp":
+        cuda_available = False
     else:
         cuda_available = o3d.core.cuda.is_available()
     try:
-        devices, skipped = select_devices(args.device, cuda_available, backend=args.backend)
+        devices, skipped = select_devices(
+            args.device, cuda_available, backend=args.backend,
+            reason=SMALL_GICP_CPU_ONLY if args.backend == "small-gicp" else None)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
     ops = list(ALL_OPS) if args.op == "all" else [args.op]
+    supported, unsupported = [], []
+    for op in ops:
+        module = (neighbors if op in neighbors.OPS else
+                  preprocess if op in preprocess.OPS else features)
+        implemented = getattr(module, "BACKEND_OPS", {}).get(args.backend, module.OPS)
+        (supported if op in implemented else unsupported).append(op)
+    if args.op != "all" and unsupported:
+        # An explicit request for something a backend lacks is an error; only
+        # a convenience sweep may visibly skip it.
+        raise SystemExit(f"{args.backend} does not implement {args.op}")
+    skipped.extend({"backend": args.backend, "device": device, "op": op,
+                    "reason": f"{args.backend} does not implement {op}"}
+                   for op in unsupported for device in devices)
+    ops = supported
+    if not ops:
+        raise SystemExit(f"{args.backend} implements none of the selected operations")
     try:
         prepared = workload.prepare(args, ops)
     except (OSError, ValueError) as error:
@@ -92,7 +125,8 @@ def main(argv=None):
 
     report = {
         "environment": environment_metadata(
-            devices, open3d_version=o3d.__version__ if o3d is not None else None),
+            devices, open3d_version=o3d.__version__ if o3d is not None else None,
+            small_gicp_version=_package_version("small-gicp") if gicp else None),
         "config": {"backend": args.backend, **prepared.config(),
                    "threads": args.threads, "repeats": args.repeats,
                    "warmup": args.warmup, "devices": devices},
@@ -113,9 +147,11 @@ def main(argv=None):
         rows = []
         for backend, device in cases:
             if op in neighbors.OPS:
-                case = neighbors.make_case(prepared.neighbors, op, backend, device)
+                case = neighbors.make_case(prepared.neighbors, op, backend, device,
+                                           threads=args.threads)
             elif op in preprocess.OPS:
-                case = preprocess.make_case(prepared.cloud, op, backend, device)
+                case = preprocess.make_case(prepared.cloud, op, backend, device,
+                                            threads=args.threads)
             else:
                 case = features.make_case(prepared.features, op, backend, device)
             result = measure(case, repeats=args.repeats, warmup=args.warmup, evaluate=False)

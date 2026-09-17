@@ -24,7 +24,12 @@ from .memory import cuda_process_memory_reader
 
 OPS = ("voxelize", "voxelize-reduce", "normals",
        "statistical-outliers", "radius-outliers")
-BACKENDS = ("torchpcl", "open3d")
+BACKENDS = ("torchpcl", "open3d", "small-gicp")
+# small-gicp has no outlier filters. Its voxel downsampling is deliberately
+# excluded: with more than one thread it collects points in parallel and
+# returns a different number of voxels (~4% more at 200k points, up to 10% by
+# its own documentation), so it is not equivalent work.
+BACKEND_OPS = {"torchpcl": OPS, "open3d": OPS, "small-gicp": ("normals",)}
 
 
 @dataclass(frozen=True)
@@ -119,8 +124,18 @@ def _open3d_run(prepared, op, device):
         nb_points=config.outlier_k, search_radius=config.outlier_radius)
 
 
+def _small_gicp_run(prepared, threads):
+    """Normals with an internally built tree, matching torchpcl's own call."""
+    import small_gicp
+
+    config = prepared.config
+    cloud = small_gicp.PointCloud(np.ascontiguousarray(prepared.points))
+    return lambda: small_gicp.estimate_normals(
+        cloud, num_neighbors=config.normal_k, num_threads=threads)
+
+
 def make_case(prepared: PreparedCloud, op: str, backend: str,
-              device: str = "cpu") -> Case:
+              device: str = "cpu", *, threads: int = 1) -> Case:
     """Allocate inputs once and return an independently reusable case."""
     if op not in OPS:
         raise ValueError(f"op must be one of {', '.join(OPS)}")
@@ -128,6 +143,10 @@ def make_case(prepared: PreparedCloud, op: str, backend: str,
         raise ValueError(f"backend must be one of {', '.join(BACKENDS)}")
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
+    if op not in BACKEND_OPS[backend]:
+        raise ValueError(f"{backend} does not implement {op}")
+    if backend == "small-gicp" and device != "cpu":
+        raise ValueError("small-gicp is CPU only")
 
     def synchronize():
         pass
@@ -142,6 +161,8 @@ def make_case(prepared: PreparedCloud, op: str, backend: str,
         run = _torchpcl_run(prepared, op, device)
         if device == "cuda":
             synchronize = torch.cuda.synchronize
+    elif backend == "small-gicp":
+        run = _small_gicp_run(prepared, threads)
     else:
         import open3d.core as o3c
 
@@ -158,6 +179,6 @@ def make_case(prepared: PreparedCloud, op: str, backend: str,
 
 
 __all__ = [
-    "BACKENDS", "OPS", "PreparedCloud", "PreprocessConfig", "make_case",
+    "BACKENDS", "BACKEND_OPS", "OPS", "PreparedCloud", "PreprocessConfig", "make_case",
     "prepare_cloud",
 ]

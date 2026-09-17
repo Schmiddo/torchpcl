@@ -123,7 +123,8 @@ def describe(report: dict) -> str:
 
 def print_environment(label: str, report: dict) -> None:
     environment = report.get("environment", {})
-    fields = ("machine", "platform", "gpu", "python", "torch", "torchpcl", "open3d")
+    fields = ("machine", "platform", "gpu", "python", "torch", "torchpcl",
+              "open3d", "small_gicp")
     details = "; ".join(f"{field}={environment[field]}" for field in fields
                         if environment.get(field) is not None)
     print(f"{label} environment: {details or 'unknown'}")
@@ -151,6 +152,10 @@ def comparison_notes(old: dict, new: dict) -> list[str]:
         notes.append("capped torchpcl vs unbounded Open3D radius search; sampled cap check only")
     if "open3d-legacy" in (old["backend"], new["backend"]):
         notes.append("Open3D legacy computes in float64")
+    if ("small-gicp" in (old["backend"], new["backend"]) and different_backends
+            and "point-to-plane" in (old.get("objective"), new.get("objective"))):
+        notes.append("small-gicp estimates its own normals; point-to-plane "
+                     "compares two normal implementations, not one shared array")
     for field in ("input_dtype", "compute_dtype", "transform_dtype"):
         if old.get(field) != new.get(field):
             notes.append(f"{field}: {old.get(field, 'unknown')} -> {new.get(field, 'unknown')}")

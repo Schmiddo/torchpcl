@@ -6,13 +6,18 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
-def select_devices(requested: str, cuda_available: bool, backend: str = "torchpcl"):
-    """Default to both devices; record unavailable CUDA, but reject explicit CUDA."""
+def select_devices(requested: str, cuda_available: bool, backend: str = "torchpcl",
+                   reason: str | None = None):
+    """Default to both devices; record unavailable CUDA, but reject explicit CUDA.
+
+    `reason` overrides the explanation for a backend that has no CUDA support
+    to lack, rather than one whose build happens not to have it.
+    """
     if requested not in ("all", "cpu", "cuda"):
         raise ValueError("device must be all, cpu, or cuda")
-    reason = f"requires an accessible GPU and a CUDA {backend} build"
+    reason = reason or f"requires an accessible GPU and a CUDA {backend} build"
     if requested == "cuda" and not cuda_available:
-        raise ValueError(f"CUDA {reason}")
+        raise ValueError(reason if reason.startswith(backend) else f"CUDA {reason}")
     devices = ["cpu", "cuda"] if requested == "all" else [requested]
     skipped = []
     if "cuda" in devices and not cuda_available:

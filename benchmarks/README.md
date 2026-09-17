@@ -13,8 +13,13 @@ just benchmark  # timestamped random operation and sampling reports
 ```
 
 The `benchmark` dependency group contains memory tooling, without Open3D or
-small-gicp. Each operation/sampling invocation selects one `--backend`, defaulting
-to `torchpcl`. Only the selected backend's device availability is checked.
+small-gicp, which live in `baseline`. Each operation/sampling invocation selects
+one `--backend`, defaulting to `torchpcl`. small-gicp implements neighbor search
+and normals; a sweep skips the operations it lacks with a recorded reason, while
+an explicit `--op` for one of them is an error. Its voxel downsampling is
+deliberately not benchmarked: with more than one thread it collects points in
+parallel and returns a different number of voxels -- 4935 against 4751 at 200k
+points, up to 10% by its own documentation -- so it is not equivalent work. Only the selected backend's device availability is checked.
 `--device all` records unavailable CUDA as skipped; explicitly requesting an
 unavailable device fails. Performance runs report time and memory, and compute
 no reference output of any kind. The test suite needs neither Open3D nor a
@@ -42,13 +47,37 @@ backends receive the same arrays unchanged. The parameters are recorded under
 reproduction of any other library's; changing it changes the workload and
 invalidates earlier baselines.
 
-Open3D remains available for its two roles, both in the Python 3.12 baseline
-environment:
+`--objective` selects the ICP residual: `point-to-point` (the default) or
+`point-to-plane`, which uses the shared normals. small-gicp is the exception --
+its `PointCloud` has no normal setter, so it estimates its own from the same
+points, and a point-to-plane row against it compares two normal implementations
+rather than one shared array. The comparison tool says so when the rows differ.
+
+Open3D and small-gicp remain available for their baseline roles, both in the
+Python 3.12 baseline environment:
 
 ```bash
-just benchmark-baseline registration --backend open3d   # the baseline to beat
-just benchmark-registration --open3d-metrics            # adds fitness/inlier RMSE
+just benchmark-baseline registration --backend open3d      # the baseline to beat
+just benchmark-baseline registration --backend small-gicp  # a strong CPU baseline
+just benchmark-registration --open3d-metrics               # adds fitness/inlier RMSE
 ```
+
+All three converge to the same pose: within a hundredth of a degree for
+point-to-point, and torchpcl and Open3D agree to four decimals on point-to-plane
+because they share the same normals. That agreement is what makes the timing
+comparison meaningful, and unlike the timings it is reproducible anywhere.
+
+One quiet-machine session on the local pair, 8 threads and 28k points per cloud,
+put small-gicp ahead on both objectives -- roughly 2x on point-to-point and
+close to 9x on point-to-plane. Re-measure before relying on the figures: a
+contended run of the same commands moved every absolute number by more than an
+order of magnitude and reordered torchpcl against Open3D, while leaving
+small-gicp's lead intact. Read `time_ms_min` next to the median.
+
+small-gicp is CPU only and has no global registration, so it runs ICP alone;
+`--method all` skips FGR with a recorded reason. It is multi-threaded by
+design, so `--threads` is part of its workload rather than an environment
+detail and is passed to every one of its calls.
 
 The second still needs that environment, so run it through
 `just benchmark-baseline registration --open3d-metrics`. Set up the environment

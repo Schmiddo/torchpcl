@@ -58,6 +58,23 @@ def require_open3d():
     return o3d
 
 
+#: small-gicp has no GPU implementation at all, which is a different situation
+#: from a build that happens to lack CUDA.
+SMALL_GICP_CPU_ONLY = "small-gicp is CPU only; it has no GPU implementation"
+
+
+def require_small_gicp():
+    """Import and return the `small_gicp` module, or exit with setup guidance."""
+    try:
+        import small_gicp
+    except ImportError:
+        raise SystemExit(
+            "small-gicp is required; install the baseline dependency group "
+            "(see benchmarks/README.md)"
+        )
+    return small_gicp
+
+
 def source_revision() -> str | None:
     """``git describe``-style revision of the working tree, ``None`` outside git.
 
@@ -81,7 +98,8 @@ def source_revision() -> str | None:
     return revision + "-dirty" if dirty.stdout.strip() else revision
 
 
-def environment_metadata(devices: list[str], *, open3d_version: str | None = None) -> dict:
+def environment_metadata(devices: list[str], *, open3d_version: str | None = None,
+                         small_gicp_version: str | None = None) -> dict:
     """Interpreter, platform, library versions, and run identity for the report.
 
     ``timestamp``, ``revision`` and ``command`` are what let two saved reports be
@@ -97,6 +115,7 @@ def environment_metadata(devices: list[str], *, open3d_version: str | None = Non
         "platform": platform.platform(),
         "torch": torch.__version__,
         "open3d": open3d_version,
+        "small_gicp": small_gicp_version,
         "torchpcl": version("torchpcl"),
         "gpu": torch.cuda.get_device_name() if "cuda" in devices else None,
     }
@@ -120,6 +139,8 @@ __all__ = [
     "positive_float",
     "positive_int",
     "require_open3d",
+    "require_small_gicp",
+    "SMALL_GICP_CPU_ONLY",
     "source_revision",
     "write_json",
 ]

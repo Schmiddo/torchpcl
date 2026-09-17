@@ -1,5 +1,6 @@
 """Registration preparation and scoring, both independent of Open3D."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -22,27 +23,27 @@ def prepared():
     if not path.is_file():
         pytest.skip(f"{path} missing; run `just download-data`")
     config = RegistrationConfig(voxel_size=0.05)
-    original, points, features = prepare_cloud(path, config)
-    return config, original, points, features
+    return config, *prepare_cloud(path, config, with_normals=True)
 
 
 def test_preparation_yields_quantized_arrays(prepared):
-    config, original, points, features = prepared
+    config, original, points, normals, features = prepared
 
     # Plain arrays, so each adapter builds its own objects from them.
-    for array in (original, points, features):
+    for array in (original, points, normals, features):
         assert isinstance(array, np.ndarray) and array.dtype == np.float64
     assert points.shape[1] == 3 and len(points) < len(original)
     assert features.shape == (len(points), 33)
+    assert normals.shape == points.shape
     # Quantized to the configured dtype, then held as float64, so both
     # backends start from identical coordinate values.
     np.testing.assert_array_equal(points, points.astype(config.dtype))
 
 
 def test_reported_preprocessing_identifies_the_workload(prepared):
-    config, original, points, features = prepared
+    config, original, points, normals, features = prepared
     pair = PreparedPair(DATA, config, np.eye(4), (original, original),
-                        (points, points), (features, features))
+                        (points, points), (normals, normals), (features, features))
 
     preprocessing = pair.metadata()["preprocessing"]
 
@@ -54,9 +55,9 @@ def test_reported_preprocessing_identifies_the_workload(prepared):
 
 
 def test_scoring_needs_no_baseline_unless_asked(prepared):
-    config, original, points, features = prepared
+    config, original, points, normals, features = prepared
     pair = PreparedPair(DATA, config, np.eye(4), (original, original),
-                        (points, points), (features, features))
+                        (points, points), (normals, normals), (features, features))
 
     case = make_case(pair, "icp", "torchpcl", "cpu")
     metrics = case.evaluate(case.run_synchronized())
@@ -65,3 +66,19 @@ def test_scoring_needs_no_baseline_unless_asked(prepared):
     # Open3D and are therefore opt-in.
     assert "rotation_error_deg" in metrics
     assert "fitness" not in metrics and "inlier_rmse" not in metrics
+
+
+def test_small_gicp_declines_what_it_does_not_implement(prepared):
+    config, original, points, normals, features = prepared
+    pair = PreparedPair(DATA, config, np.eye(4), (original, original),
+                        (points, points), (normals, normals), (features, features))
+
+    # No global registration, no GPU, and point-to-plane needs shared normals.
+    with pytest.raises(ValueError, match="no global registration"):
+        make_case(pair, "fgr", "small-gicp", "cpu")
+    with pytest.raises(ValueError, match="CPU only"):
+        make_case(pair, "icp", "small-gicp", "cuda")
+    without_normals = replace(pair, normals=None)
+    with pytest.raises(ValueError, match="point-to-plane requires"):
+        make_case(without_normals, "icp", "torchpcl", "cpu",
+                  objective="point-to-plane")

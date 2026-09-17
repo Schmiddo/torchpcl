@@ -25,7 +25,10 @@ from .inputs import random_points
 from .memory import cuda_process_memory_reader
 
 OPS = ("index-build", "knn", "knn-build-query", "radius")
-BACKENDS = ("torchpcl", "open3d")
+BACKENDS = ("torchpcl", "open3d", "small-gicp")
+# small-gicp exposes k-nearest search only; it has no radius query.
+BACKEND_OPS = {"torchpcl": OPS, "open3d": OPS,
+               "small-gicp": ("index-build", "knn", "knn-build-query")}
 # torchpcl's search API caps neighbors per query; a radius holding more true
 # neighbors than this would silently compare a truncated result against a
 # complete one.
@@ -234,8 +237,31 @@ def _open3d_cases(prepared, op, device):
     )
 
 
+def _small_gicp_cases(prepared, op, threads):
+    """small-gicp's KdTree, given the thread count its API takes explicitly."""
+    import small_gicp
+
+    config = prepared.config
+    reference = small_gicp.PointCloud(np.ascontiguousarray(prepared.reference))
+    queries = np.ascontiguousarray(prepared.queries)
+
+    if op == "index-build":
+        return (lambda: small_gicp.KdTree(reference, num_threads=threads),
+                "small-gicp-kdtree")
+    if op == "knn-build-query":
+        def build_and_query():
+            tree = small_gicp.KdTree(reference, num_threads=threads)
+            return tree.batch_knn_search(queries, config.k, num_threads=threads)
+
+        return build_and_query, "small-gicp-kdtree"
+
+    tree = small_gicp.KdTree(reference, num_threads=threads)
+    return (lambda: tree.batch_knn_search(queries, config.k, num_threads=threads),
+            "small-gicp-kdtree")
+
+
 def make_case(prepared: PreparedNeighbors, op: str, backend: str,
-              device: str = "cpu") -> Case:
+              device: str = "cpu", *, threads: int = 1) -> Case:
     """Allocate inputs once and return an independently reusable case."""
     if op not in OPS:
         raise ValueError(f"op must be one of {', '.join(OPS)}")
@@ -243,6 +269,10 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
         raise ValueError(f"backend must be one of {', '.join(BACKENDS)}")
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
+    if op not in BACKEND_OPS[backend]:
+        raise ValueError(f"{backend} does not implement {op}")
+    if backend == "small-gicp" and device != "cpu":
+        raise ValueError("small-gicp is CPU only")
     if op == "radius":
         check_radius_capacity(prepared)
 
@@ -259,6 +289,8 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
         run, implementation = _torchpcl_cases(prepared, op, device)
         if device == "cuda":
             synchronize = torch.cuda.synchronize
+    elif backend == "small-gicp":
+        run, implementation = _small_gicp_cases(prepared, op, threads)
     else:
         import open3d.core as o3c
 
@@ -276,6 +308,7 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
 
 
 __all__ = [
-    "BACKENDS", "MAX_NEIGHBORS", "OPS", "NeighborsConfig", "PreparedNeighbors",
+    "BACKENDS", "BACKEND_OPS", "MAX_NEIGHBORS", "OPS", "NeighborsConfig",
+    "PreparedNeighbors",
     "check_radius_capacity", "make_case", "prepare_neighbors",
 ]
