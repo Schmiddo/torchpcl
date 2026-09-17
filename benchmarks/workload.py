@@ -118,11 +118,15 @@ class Workload:
         args, lines = self.args, []
         if self.neighbors is not None:
             info = self.neighbors.metadata()
-            lines.append(
-                f"  search: reference {info['num_reference']}, queries "
-                f"{info['num_queries']}, k {args.k}, radius {args.radius}; "
-                f"densest sampled neighborhood {info['max_radius_count']} "
-                f"(torchpcl returns at most {neighbors.MAX_NEIGHBORS})")
+            line = (f"  search: reference {info['num_reference']}, queries "
+                    f"{info['num_queries']}, k {args.k}")
+            if "radius" in self.ops:
+                # Brute forcing this is what the radius guard already paid for;
+                # other operations never compute it.
+                line += (f", radius {args.radius}; densest sampled neighborhood "
+                         f"{self.neighbors.max_radius_count} (torchpcl returns "
+                         f"at most {neighbors.MAX_NEIGHBORS})")
+            lines.append(line)
         if self.cloud is not None:
             lines.append(
                 f"  preprocess: {self.cloud.metadata()['num_points']} points, "

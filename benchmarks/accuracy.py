@@ -73,6 +73,12 @@ DESCRIPTOR_ROW_TOLERANCE = 1e-4
 # This stays far below a mapping error, which moves 1e-3 to 6e-2 of all points
 # -- the offset check below is what keeps that distinguishable.
 MASK_TOLERANCE = 1e-4
+# Descriptors sum to 600 per row, so this is a ~0.17% disagreement: well above
+# float32 noise, well below a genuinely different neighborhood. A max over
+# 200k x 33 values is dominated by single differing neighborhoods, so the check
+# counts affected rows instead -- Open3D's own CPU and CUDA results differ by
+# several units under a max.
+BIN_TOLERANCE = 1.0
 # The benchmark's random default (0.05) is past a cliff: at 200k uniform points
 # it removes 6 of them, so both libraries agree on "keep everything" and the
 # comparison proves nothing. Uniform points in a unit cube have a narrow
@@ -173,7 +179,7 @@ def descriptor_mismatch(found: np.ndarray, expected: np.ndarray,
     if not valid.any():
         return 0.0, 0.0
     difference = np.abs(found[valid] - expected[valid])
-    return (float(np.mean(difference.max(1) > features.BIN_TOLERANCE)),
+    return (float(np.mean(difference.max(1) > BIN_TOLERANCE)),
             float(difference.max()))
 
 
@@ -220,10 +226,10 @@ def _open3d_output(op, result):
 def reference_output(prepared, op):
     """The accepted answer for one operation, computed once on CPU."""
     if op in ("knn", "radius"):
-        gate = prepared.neighbors.gate_distances2.shape[0]
+        shared = prepared.neighbors
         return ("brute-force",
-                prepared.neighbors.gate_distances2 if op == "knn"
-                else prepared.neighbors.gate_counts, gate)
+                shared.knn_distances2() if op == "knn" else shared.radius_counts(),
+                shared.gate)
     return "open3d-cpu", _open3d_output(op, _run(prepared, op, "open3d", "cpu")), None
 
 
@@ -272,7 +278,7 @@ def check(prepared, op, device, reference) -> list[Check]:
     mismatch, worst_bin = descriptor_mismatch(descriptors, expected, valid)
     checks = [
         make("descriptor_mismatch_fraction", mismatch,
-             f"rows disagreeing by more than {features.BIN_TOLERANCE} of 600 "
+             f"rows disagreeing by more than {BIN_TOLERANCE} of 600 "
              "per row; a global max is dominated by single neighborhoods",
              limit=DESCRIPTOR_ROW_TOLERANCE),
         # Context: a single neighbor flipping bins costs about 100/k, so a

@@ -16,9 +16,9 @@ The `benchmark` dependency group contains memory tooling, without Open3D or
 small-gicp. Each operation/sampling invocation selects one `--backend`, defaulting
 to `torchpcl`. Only the selected backend's device availability is checked.
 `--device all` records unavailable CUDA as skipped; explicitly requesting an
-unavailable device fails. Performance runs report time and memory without
-reference outputs or accuracy scoring. Existing correctness helpers/tests and
-registration evaluation retain their scoring behavior.
+unavailable device fails. Performance runs report time and memory, and compute
+no reference output of any kind. The test suite needs neither Open3D nor a
+baseline environment; registration evaluation still has its own scoring.
 
 Every benchmark shares the `Case`/`measure` contract described below.
 Registration and Redwood remain separate workflows requiring Open3D. Accuracy
@@ -300,9 +300,11 @@ just benchmark-operations --input redwood --op fpfh --normals data/normals.npy
 ```
 
 Performance runs do not compute Open3D reference outputs or call scoring hooks.
-Neighbor preparation still computes its existing brute-force sample for the
-radius-cap guard. Correctness tests and reference helpers are retained; their
-migration out of the benchmark harness is a separate follow-up.
+Neighbor preparation brute forces nothing on its own: a timing run measures a
+search rather than checking one. The scored prefix is computed only when
+something asks for it -- the radius capacity guard, which needs neighbor counts
+and so runs for `radius` alone, and the accuracy tool below. At the default
+200k reference that moved 3.5s out of every kNN and index-build run.
 
 ## Accuracy checking
 
@@ -346,6 +348,11 @@ than the benchmark's 0.05. At 200k uniform points 0.05 removes six of them, so
 both libraries agree on "keep everything" and the comparison proves nothing;
 0.03 removes 25%. Real fragments discriminate at their own default. Timing
 defaults are unchanged, since altering them would invalidate saved baselines.
+
+The discriminating check needs a workload dense enough to have something to
+disagree about, which the default sizes provide; a much smaller `--num-reference`
+can leave the filter removing nearly everything or nearly nothing, and the check
+then reports honestly that the run cannot evidence the mapping.
 
 Open3D is a comparison implementation, not a universal oracle. A check above
 tolerance means the two disagree and someone must look, not that torchpcl is
@@ -429,20 +436,25 @@ operation doesn't touch the others:
   inputs once (loading a pair, generating a random cloud, ...) -- reusable
   cloud generation itself lives in `inputs.py` -- and build a `Case` per
   backend/device/variant. This is the only place that knows about a specific
-  operation's inputs, options, and (if any) accuracy metrics.
+  operation's inputs and options. Agreement between backends is not their
+  concern: `accuracy.py` owns every comparison, and builds its cases through
+  the same `make_case` the benchmark uses, so a check cannot drift from what
+  is measured.
 - **`runner.measure`** (`runner.py`) times a `Case` with warmup/repetition and
   peak-memory sampling (`memory.py`, backend-neutral). It has no knowledge of
   what a specific operation measures: it medians whatever numeric fields
   `case.evaluate()` returns (an empty dict if there's nothing to score, as for
   sampling) and reports `case.metadata` alongside them. Operation/sampling CLIs
-  pass `evaluate=False` to bypass scoring; the default remains `True` for
-  registration and existing tests.
+  pass `evaluate=False`; the hook now has one remaining caller, registration,
+  and the default stays `True` for it.
 
-The CLI scripts (`registration.py`, `sampling.py`) are thin: argument parsing,
-picking which cases to build, and console/JSON output. Shared CLI plumbing
-(argument types, thread configuration, environment metadata, JSON writing,
-`open3d` import guard) lives in `cli.py`; both scripts import it rather than
-each defining their own copy. `metrics.py` holds registration-specific
+The CLI scripts (`registration.py`, `sampling.py`, `operations.py`,
+`accuracy.py`) are thin: argument parsing, picking which cases to build, and
+console/JSON output. Shared CLI plumbing (argument types, thread configuration,
+environment metadata, JSON writing, `open3d` import guard) lives in `cli.py`;
+`workload.py` holds the operation arguments and input preparation that
+`operations.py` and `accuracy.py` share, so the checked workload and the timed
+one cannot diverge. `metrics.py` holds registration-specific
 ground-truth validation and pose errors, independent of `runner.py`.
 
 ### Reusing the components

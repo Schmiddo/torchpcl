@@ -16,7 +16,7 @@ queries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -30,9 +30,9 @@ BACKENDS = ("torchpcl", "open3d")
 # neighbors than this would silently compare a truncated result against a
 # complete one.
 MAX_NEIGHBORS = 64
-# Queries scored against brute force. The full cross product is far too large
-# to materialize at benchmark sizes, and a fixed prefix is enough to catch a
-# backend returning wrong neighbors.
+# Queries brute forced when an answer is requested. The full cross product is
+# far too large to materialize at benchmark sizes, and a fixed prefix is enough
+# to catch a backend returning wrong neighbors.
 GATE_QUERIES = 1024
 
 
@@ -62,15 +62,63 @@ class NeighborsConfig:
 
 @dataclass
 class PreparedNeighbors:
-    """Shared clouds plus the brute-force answers the cases are scored against."""
+    """The shared clouds. Brute-force answers are computed only on request.
+
+    A timing run needs neither: it measures a search, it does not check one.
+    The answers cost seconds at benchmark sizes, so they are produced lazily by
+    whoever actually wants them -- the accuracy tool, and the radius capacity
+    guard below.
+    """
 
     config: NeighborsConfig
     source: str
     reference: np.ndarray
     queries: np.ndarray
-    gate_distances2: np.ndarray
-    gate_counts: np.ndarray
-    max_radius_count: int
+    _distances2: np.ndarray | None = field(default=None, repr=False)
+    _counts: np.ndarray | None = field(default=None, repr=False)
+
+    @property
+    def gate(self) -> int:
+        return min(GATE_QUERIES, len(self.queries))
+
+    def _blocks(self):
+        """Squared distances from the scored prefix to the whole reference.
+
+        Chunked so the prefix never materializes a full distance matrix; the
+        chunk shrinks as the reference grows to hold the peak roughly fixed.
+        """
+        import torch
+
+        reference = torch.from_numpy(self.reference)
+        queries = torch.from_numpy(self.queries[:self.gate])
+        chunk = max(1, 64_000_000 // (3 * len(self.reference)))
+        for start in range(0, self.gate, chunk):
+            block = queries[start:start + chunk]
+            yield (block[:, None, :] - reference[None, :, :]).square().sum(-1)
+
+    def knn_distances2(self) -> np.ndarray:
+        """Brute-forced k nearest squared distances for the scored prefix."""
+        import torch
+
+        if self._distances2 is None:
+            self._distances2 = torch.cat(
+                [block.topk(self.config.k, dim=1, largest=False).values
+                 for block in self._blocks()]).numpy()
+        return self._distances2
+
+    def radius_counts(self) -> np.ndarray:
+        """Brute-forced neighbor counts within the radius, for the prefix."""
+        import torch
+
+        if self._counts is None:
+            squared = self.config.radius * self.config.radius
+            self._counts = torch.cat(
+                [(block <= squared).sum(1) for block in self._blocks()]).numpy()
+        return self._counts
+
+    @property
+    def max_radius_count(self) -> int:
+        return int(self.radius_counts().max())
 
     def metadata(self):
         return {
@@ -79,24 +127,18 @@ class PreparedNeighbors:
             "num_queries": int(self.queries.shape[0]),
             "k": self.config.k,
             "radius": self.config.radius,
-            "gate_queries": int(self.gate_distances2.shape[0]),
-            # Truncation would invalidate the radius comparison, so the count
-            # that drove the check is reported rather than merely asserted on.
-            "max_radius_count": self.max_radius_count,
         }
 
 
 def prepare_neighbors(config: NeighborsConfig,
                       points: np.ndarray | None = None) -> PreparedNeighbors:
-    """Prepare both clouds once and brute-force the scored query prefix.
+    """Prepare both clouds. Nothing is brute forced until something asks.
 
     `points` supplies a loaded cloud (a scan fragment) as the reference;
     queries are then a seeded subsample of it, since searching a cloud against
     itself is what normals and feature extraction actually do. Without it both
     clouds are drawn at random.
     """
-    import torch
-
     if points is None:
         source = "random"
         reference = random_points(config.num_reference, config.dtype, config.seed)
@@ -107,30 +149,24 @@ def prepare_neighbors(config: NeighborsConfig,
         rng = np.random.default_rng(config.seed + 1)
         count = min(config.num_queries, len(reference))
         queries = reference[rng.choice(len(reference), count, replace=False)]
+    return PreparedNeighbors(config=config, source=source,
+                             reference=reference, queries=queries)
 
-    gate = min(GATE_QUERIES, len(queries))
-    reference_t = torch.from_numpy(reference)
-    gate_t = torch.from_numpy(queries[:gate])
-    # Chunked so the scored prefix never materializes a full distance matrix;
-    # the chunk shrinks as the reference grows to hold the peak roughly fixed.
-    chunk = max(1, 64_000_000 // (3 * len(reference)))
-    distances2, counts = [], []
-    for start in range(0, gate, chunk):
-        block = gate_t[start:start + chunk]
-        block_d2 = (block[:, None, :] - reference_t[None, :, :]).square().sum(-1)
-        distances2.append(block_d2.topk(config.k, dim=1, largest=False).values)
-        counts.append((block_d2 <= config.radius * config.radius).sum(1))
-    gate_counts = torch.cat(counts)
 
-    return PreparedNeighbors(
-        config=config,
-        source=source,
-        reference=reference,
-        queries=queries,
-        gate_distances2=torch.cat(distances2).numpy(),
-        gate_counts=gate_counts.numpy(),
-        max_radius_count=int(gate_counts.max()),
-    )
+def check_radius_capacity(prepared: PreparedNeighbors) -> int:
+    """Reject a radius that overruns torchpcl's fixed-width result.
+
+    Returns the densest sampled neighborhood. This samples a query prefix: a
+    sampled maximum below the cap does not prove that every query is
+    untruncated, only that the sampled ones are.
+    """
+    count = prepared.max_radius_count
+    if count > MAX_NEIGHBORS:
+        raise ValueError(
+            f"radius {prepared.config.radius} yields up to {count} neighbors, "
+            f"above torchpcl's cap of {MAX_NEIGHBORS}; reduce --radius so both "
+            "backends return complete neighborhoods")
+    return count
 
 
 def _torchpcl_cases(prepared, op, device):
@@ -198,43 +234,6 @@ def _open3d_cases(prepared, op, device):
     )
 
 
-def _make_evaluate(prepared, op, backend):
-    """Score a run against the brute-force prefix, or nothing to score."""
-    if op == "index-build":
-        return None
-    gate = prepared.gate_distances2.shape[0]
-
-    if op in ("knn", "knn-build-query"):
-        expected = np.sort(prepared.gate_distances2, axis=1)
-
-        def evaluate(result):
-            if backend == "torchpcl":
-                found = result.distances2[:gate].double().cpu().numpy()
-            else:
-                found = result[1][:gate].cpu().numpy().astype(np.float64)
-            # Neighbor order is unspecified on both sides; only the multiset
-            # of distances is contractual.
-            error = np.abs(np.sort(found, axis=1) - expected).max()
-            return {"max_distance2_error": float(error)}
-
-        return evaluate
-
-    expected_counts = prepared.gate_counts
-
-    def evaluate(result):
-        if backend == "torchpcl":
-            found = result.valid[:gate].sum(1).cpu().numpy()
-        else:
-            # Ragged: flat neighbors plus per-query row splits.
-            found = np.diff(result[2].cpu().numpy())[:gate]
-        return {
-            "count_mismatch_fraction": float(
-                np.mean(found != expected_counts)),
-        }
-
-    return evaluate
-
-
 def make_case(prepared: PreparedNeighbors, op: str, backend: str,
               device: str = "cpu") -> Case:
     """Allocate inputs once and return an independently reusable case."""
@@ -244,12 +243,8 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
         raise ValueError(f"backend must be one of {', '.join(BACKENDS)}")
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
-    if op == "radius" and prepared.max_radius_count > MAX_NEIGHBORS:
-        raise ValueError(
-            f"radius {prepared.config.radius} yields up to "
-            f"{prepared.max_radius_count} neighbors, above torchpcl's cap of "
-            f"{MAX_NEIGHBORS}; reduce --radius so both backends return "
-            "complete neighborhoods")
+    if op == "radius":
+        check_radius_capacity(prepared)
 
     def synchronize():
         pass
@@ -271,12 +266,10 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
         if device == "cuda":
             synchronize = o3c.cuda.synchronize
 
-    evaluate = _make_evaluate(prepared, op, backend)
     return Case(
         name=op, backend=backend, device=device,
         run=run, synchronize=synchronize,
         device_memory_reader=device_memory_reader,
-        **({} if evaluate is None else {"evaluate": evaluate}),
         metadata={"input_dtype": prepared.config.dtype,
                   "implementation": implementation},
     )
@@ -284,5 +277,5 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
 
 __all__ = [
     "BACKENDS", "MAX_NEIGHBORS", "OPS", "NeighborsConfig", "PreparedNeighbors",
-    "make_case", "prepare_neighbors",
+    "check_radius_capacity", "make_case", "prepare_neighbors",
 ]

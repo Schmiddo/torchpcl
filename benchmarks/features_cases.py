@@ -13,12 +13,6 @@ OPS = ("fpfh",)
 BACKENDS = ("torchpcl", "open3d")
 # torchpcl's FPFH accepts at most this many neighbors per point.
 MAX_NEIGHBORS = 64
-# Descriptors sum to 600 per row, so this is a ~0.17% disagreement: well above
-# float32 noise, well below a genuinely different neighborhood. A max over
-# 200k x 33 values is dominated by single differing neighborhoods, so the gate
-# counts affected rows instead -- Open3D's own CPU and CUDA results differ by
-# several units under a max.
-BIN_TOLERANCE = 1.0
 
 
 @dataclass(frozen=True)
@@ -88,44 +82,8 @@ def _open3d_run(prepared, device):
         cloud, max_nn=config.max_neighbors, radius=config.radius)
 
 
-def reference_output(prepared: PreparedFeatures):
-    """Open3D's CPU descriptors, the target both backends are scored on."""
-    return _open3d_run(prepared, "cpu")().numpy().astype(np.float64)
-
-
-def _make_evaluate(backend, reference):
-    def evaluate(result):
-        if backend == "torchpcl":
-            valid = result.valid.cpu().numpy()
-            found = result.descriptors.cpu().numpy().astype(np.float64)
-            # Surfaced rather than hidden: a filled neighbor list means the
-            # bounded search may have dropped radius neighbors, so the two
-            # libraries could be summarizing different neighborhoods.
-            extra = {
-                "valid_fraction": float(valid.mean()),
-                "limit_reached_fraction": float(
-                    result.neighbor_limit_reached.cpu().numpy().mean()),
-            }
-        else:
-            found = result.cpu().numpy().astype(np.float64)
-            valid = np.ones(len(found), dtype=bool)
-            extra = {}
-        if not valid.any():
-            return {"descriptor_mismatch_fraction": 0.0, "max_bin_error": 0.0,
-                    **extra}
-        difference = np.abs(found[valid] - reference[valid])
-        return {
-            "descriptor_mismatch_fraction": float(
-                np.mean(difference.max(1) > BIN_TOLERANCE)),
-            "max_bin_error": float(difference.max()),
-            **extra,
-        }
-
-    return evaluate
-
-
 def make_case(prepared: PreparedFeatures, op: str, backend: str,
-              device: str = "cpu", reference=None) -> Case:
+              device: str = "cpu") -> Case:
     """Allocate inputs once and return an independently reusable case."""
     if op not in OPS:
         raise ValueError(f"op must be one of {', '.join(OPS)}")
@@ -152,12 +110,10 @@ def make_case(prepared: PreparedFeatures, op: str, backend: str,
     if device == "cuda":
         case.synchronize = synchronize
         case.device_memory_reader = cuda_process_memory_reader()
-    if reference is not None:
-        case.evaluate = _make_evaluate(backend, reference)
     return case
 
 
 __all__ = [
     "BACKENDS", "MAX_NEIGHBORS", "OPS", "FeaturesConfig", "PreparedFeatures",
-    "make_case", "prepare_features", "reference_output",
+    "make_case", "prepare_features",
 ]

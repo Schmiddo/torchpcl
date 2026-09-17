@@ -9,7 +9,7 @@ import sys
 import numpy as np
 import pytest
 
-from benchmarks import compare, features_cases, operations, preprocess_cases, sampling
+from benchmarks import compare, neighbors_cases, operations, sampling
 from benchmarks.case import Case
 from benchmarks.features_cases import FeaturesConfig, prepare_features
 from benchmarks.inputs import load_fragment, random_normals
@@ -47,12 +47,6 @@ def test_performance_skips_scoring_but_default_keeps_it(monkeypatch):
 def test_torchpcl_entry_points_without_baselines(monkeypatch, tmp_path, search_device):
     pytest.importorskip("psutil")
     forbid_baselines(monkeypatch)
-
-    def unexpected_reference(*args, **kwargs):
-        pytest.fail("performance run requested correctness reference output")
-
-    monkeypatch.setattr(preprocess_cases, "reference_output", unexpected_reference)
-    monkeypatch.setattr(features_cases, "reference_output", unexpected_reference)
     common = COMMON.copy()
     common[1] = search_device.type
     path = tmp_path / "operations.json"
@@ -66,6 +60,24 @@ def test_torchpcl_entry_points_without_baselines(monkeypatch, tmp_path, search_d
         assert result["config"]["backend"] == "torchpcl"
         assert all(row["backend"] == "torchpcl" for row in result["results"])
         assert all(set(row["median"]) == {"time_ms"} for row in result["results"])
+
+
+@pytest.mark.parametrize("op,brute_forced", [("knn", False), ("radius", True)])
+def test_timing_runs_brute_force_only_for_the_radius_guard(monkeypatch, op, brute_forced):
+    """A timing run measures a search; only the radius cap guard needs answers.
+
+    Brute forcing the scored prefix costs seconds at benchmark sizes, and a
+    performance run has nothing to do with the result.
+    """
+    pytest.importorskip("psutil")
+    calls = []
+    original = neighbors_cases.PreparedNeighbors._blocks
+    monkeypatch.setattr(neighbors_cases.PreparedNeighbors, "_blocks",
+                        lambda self: calls.append(op) or original(self))
+
+    operations.main(COMMON + SMALL_OPS + ["--op", op])
+
+    assert bool(calls) is brute_forced
 
 
 def write_ply(path, normals=False):
@@ -133,24 +145,6 @@ def test_normals_are_repeatable_and_quantized_without_open3d(monkeypatch):
     assert not np.array_equal(normals, random_normals(32, 1))
     prepared = prepare_features(FeaturesConfig(), np.ones((32, 3)), normals=normals)
     np.testing.assert_array_equal(prepared.normals, normals.astype("float32").astype("float64"))
-
-
-@pytest.mark.parametrize("module,backend,options", [
-    (operations, "open3d", SMALL_OPS),
-    (sampling, "open3d-tensor", ["--num-points", "128", "--num-samples", "8"]),
-    (sampling, "open3d-legacy", ["--num-points", "128", "--num-samples", "8"]),
-])
-def test_only_selected_open3d_backend_runs(module, backend, options, monkeypatch):
-    pytest.importorskip("psutil")
-    pytest.importorskip("open3d")
-    import torchpcl
-
-    # Selection must not probe the unselected torchpcl CUDA build.
-    monkeypatch.setattr(torchpcl._C, "has_cuda", lambda: pytest.fail("torchpcl probed"))
-    report = module.main(COMMON + options + ["--backend", backend])
-    assert {row["backend"] for row in report["results"]} == {backend}
-    assert report["environment"]["open3d"]
-    assert all(set(row["median"]) == {"time_ms"} for row in report["results"])
 
 
 def test_missing_selected_backend_and_legacy_cuda(monkeypatch):

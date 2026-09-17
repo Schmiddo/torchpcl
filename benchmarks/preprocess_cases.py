@@ -119,83 +119,8 @@ def _open3d_run(prepared, op, device):
         nb_points=config.outlier_k, search_radius=config.outlier_radius)
 
 
-# Far above float32 centroid noise (order 1e-7) and far below any useful
-# voxel size, so it identifies voxels without merging neighbors.
-CENTROID_TOLERANCE = 1e-5
-
-
-def _centroid_keys(points: np.ndarray) -> set:
-    """Tolerance-quantized centroid identities, comparable as a set.
-
-    Comparing sorted rows would make a single differing voxel shift every row
-    after it, reporting a one-voxel disagreement as a large coordinate error.
-    Set membership reports it as the small disagreement it is -- which matters
-    here, because Open3D's own CPU and CUDA voxelizations do differ on a
-    handful of voxels.
-    """
-    return set(map(tuple, np.round(points / CENTROID_TOLERANCE).astype(np.int64)))
-
-
-def _make_evaluate(prepared, op, backend, reference):
-    """Score against the reference backend's output, or nothing to score."""
-    if reference is None:
-        return None
-
-    if op in ("voxelize", "voxelize-reduce"):
-        if op == "voxelize":
-            # Bare voxelize returns no centroids, so there is nothing to
-            # compare; its companion case carries the accuracy check.
-            return None
-
-        def evaluate(result):
-            found = (result.cpu().numpy() if backend == "torchpcl"
-                     else result.point.positions.cpu().numpy())
-            keys = _centroid_keys(found.astype(np.float64))
-            return {"centroid_mismatch_fraction":
-                    len(reference - keys) / len(reference)}
-
-        return evaluate
-
-    if op == "normals":
-        def evaluate(result):
-            found = (result.normals.cpu().numpy() if backend == "torchpcl"
-                     else result.point.normals.cpu().numpy())
-            # torchpcl's normal signs are arbitrary without attached normals,
-            # so only the unsigned direction is contractual.
-            alignment = np.abs((found.astype(np.float64) * reference).sum(1))
-            return {"min_normal_alignment": float(alignment.min())}
-
-        return evaluate
-
-    def evaluate(result):
-        if backend == "torchpcl":
-            kept = ~result.cpu().numpy()
-        else:
-            kept = result[1].cpu().numpy().astype(bool)
-        return {"mask_mismatch_fraction": float(np.mean(kept != reference))}
-
-    return evaluate
-
-
-def reference_output(prepared: PreparedCloud, op: str):
-    """Compute Open3D's CPU answer once, as the target every case is scored on.
-
-    Open3D is the reference because it is the established implementation; a
-    case scoring zero reproduces it exactly.
-    """
-    if op == "voxelize":
-        return None
-    result = _open3d_run(prepared, op, "cpu")()
-    if op == "voxelize-reduce":
-        return _centroid_keys(
-            result.point.positions.numpy().astype(np.float64))
-    if op == "normals":
-        return result.point.normals.numpy().astype(np.float64)
-    return result[1].numpy().astype(bool)
-
-
 def make_case(prepared: PreparedCloud, op: str, backend: str,
-              device: str = "cpu", reference=None) -> Case:
+              device: str = "cpu") -> Case:
     """Allocate inputs once and return an independently reusable case."""
     if op not in OPS:
         raise ValueError(f"op must be one of {', '.join(OPS)}")
@@ -224,17 +149,15 @@ def make_case(prepared: PreparedCloud, op: str, backend: str,
         if device == "cuda":
             synchronize = o3c.cuda.synchronize
 
-    evaluate = _make_evaluate(prepared, op, backend, reference)
     return Case(
         name=op, backend=backend, device=device,
         run=run, synchronize=synchronize,
         device_memory_reader=device_memory_reader,
-        **({} if evaluate is None else {"evaluate": evaluate}),
         metadata={"input_dtype": prepared.config.dtype},
     )
 
 
 __all__ = [
     "BACKENDS", "OPS", "PreparedCloud", "PreprocessConfig", "make_case",
-    "prepare_cloud", "reference_output",
+    "prepare_cloud",
 ]
