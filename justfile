@@ -24,6 +24,10 @@ benchmark *args:
     just benchmark-operations --json "runs/$stamp-operations-random.json" "$@"
     echo "Reports: runs/$stamp-*.json"
 
+# Check torchpcl against Open3D and brute force. No timing; needs the Open3D env.
+benchmark-accuracy *args:
+    UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group baseline python benchmarks/accuracy.py "$@"
+
 # Diff two saved --json reports; needs neither Open3D nor the benchmark env.
 benchmark-compare before after *args:
     uv run python benchmarks/compare.py "$@"

@@ -21,7 +21,9 @@ reference outputs or accuracy scoring. Existing correctness helpers/tests and
 registration evaluation retain their scoring behavior.
 
 Every benchmark shares the `Case`/`measure` contract described below.
-Registration and Redwood remain separate workflows requiring Open3D.
+Registration and Redwood remain separate workflows requiring Open3D. Accuracy
+is checked by its own command, never by a benchmark and never by the test
+suite; see "Accuracy checking" below.
 
 ## Registration benchmarks
 
@@ -301,6 +303,54 @@ Performance runs do not compute Open3D reference outputs or call scoring hooks.
 Neighbor preparation still computes its existing brute-force sample for the
 radius-cap guard. Correctness tests and reference helpers are retained; their
 migration out of the benchmark harness is a separate follow-up.
+
+## Accuracy checking
+
+A benchmark answers "how fast". Whether torchpcl still agrees with an accepted
+implementation is a separate question with its own command, because combining
+them makes each worse: a scoring pass runs on measured output, correctness
+failures surface as odd timings, and every performance run drags a reference
+computation behind it.
+
+```bash
+just benchmark-accuracy --op all --json runs/accuracy.json
+```
+
+It runs no timing, prints one table and exits nonzero when a check exceeds its
+tolerance. Two references are used, because they are not equally strong:
+neighbor searches are compared against **brute force**, the true answer, and
+everything else against **Open3D on CPU**, the accepted implementation. Rows
+marked `info` report a number without judging it — the fraction a filter
+removed, the worst FPFH bin, whether a bounded search truncated — because a
+comparison on a workload where the operation did nothing is trivially
+satisfied and should be visible as such.
+
+Tolerances are the accepted part, and each carries its reason in the report.
+Two are deliberately nonzero, for reasons measured rather than assumed:
+
+- **FPFH** allows 1e-4 of rows. A feature landing on a histogram bin edge
+  rounds either way in float32 and moves one neighbor's contribution, about
+  `100/k` of the 600 per row, between adjacent bins. At 200k random points two
+  rows differed, each a clean transfer between bins 29 and 30 with mass
+  conserved, none near the radius boundary and none truncated.
+- **Outlier masks** allow 1e-4 of points. Both filters threshold a statistic
+  accumulated over the whole cloud, and summation order differs between
+  implementations, so the thresholds differ by more than a few ULP. On a 196k
+  Redwood fragment two points differed, each ~300 float32 ULP from the
+  threshold. A wrong `k` mapping moves 1e-3 to 6e-2 of all points instead,
+  which the `offset_k_mismatch_fraction` check pins explicitly: `k±1` must
+  disagree, or agreement at `k` would evidence nothing.
+
+The accuracy run defaults `--outlier-radius` to 0.03 on random input rather
+than the benchmark's 0.05. At 200k uniform points 0.05 removes six of them, so
+both libraries agree on "keep everything" and the comparison proves nothing;
+0.03 removes 25%. Real fragments discriminate at their own default. Timing
+defaults are unchanged, since altering them would invalidate saved baselines.
+
+Open3D is a comparison implementation, not a universal oracle. A check above
+tolerance means the two disagree and someone must look, not that torchpcl is
+wrong. Re-accept the report after an Open3D upgrade rather than assuming
+continuity.
 
 ## Tracking progress across runs
 
