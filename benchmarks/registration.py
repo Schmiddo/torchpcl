@@ -30,6 +30,9 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, nargs="+", default=[Path("data")],
                         help="pair directories containing source.ply, target.ply, T_target_source.txt")
+    parser.add_argument("--backend", choices=["torchpcl", "open3d"], default="torchpcl")
+    parser.add_argument("--open3d-metrics", action="store_true",
+                        help="also report Open3D fitness and inlier RMSE; needs Open3D")
     parser.add_argument("--method", choices=["all", "icp", "fgr"], default="all")
     parser.add_argument("--device", choices=["all", "cpu", "cuda"], default="all",
                         help="default: CPU and CUDA; skip unavailable CUDA in all mode")
@@ -58,68 +61,83 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     configure_threads(args.threads)
-    o3d = require_open3d()
+    needs_open3d = args.backend == "open3d" or args.open3d_metrics
+    o3d = require_open3d() if needs_open3d else None
     import torch
-    from torchpcl import _C
 
     torch.set_num_threads(args.threads)
-    cuda_available = torch.cuda.is_available() and _C.has_cuda()
+    if args.backend == "torchpcl":
+        from torchpcl import _C
+
+        cuda_available = torch.cuda.is_available() and _C.has_cuda()
+    else:
+        cuda_available = o3d.core.cuda.is_available()
     methods = ("icp", "fgr") if args.method == "all" else (args.method,)
     try:
-        devices, skipped = select_devices(args.device, cuda_available)
-        open3d_devices, open3d_skipped = (select_devices(
-            args.device, o3d.core.cuda.is_available(), backend="open3d"
-        ) if "icp" in methods else ([], []))
-        skipped.extend(open3d_skipped)
+        devices, skipped = select_devices(args.device, cuda_available, backend=args.backend)
     except ValueError as error:
         raise SystemExit(str(error)) from error
+
+    schedule = []
+    for method in methods:
+        for device in devices:
+            if args.backend == "open3d" and method == "fgr" and device != "cpu":
+                skipped.append({"backend": "open3d", "device": device,
+                                "reason": "Open3D FGR has no tensor or CUDA API"})
+                continue
+            schedule.append((method, device))
+    if not schedule:
+        raise SystemExit("no runnable method/device combination; see the skip reasons above")
+
     config = RegistrationConfig(
         voxel_size=args.voxel_size, dtype=args.dtype, seed=args.seed,
         icp_distance=args.icp_distance, fgr_distance=args.fgr_distance,
         icp_iterations=args.icp_iterations, fgr_iterations=args.fgr_iterations,
     )
     report = {
-        "environment": environment_metadata(devices, open3d_version=o3d.__version__),
-        "config": {**asdict(config), "devices": devices, "open3d_icp_devices": open3d_devices,
-                   "requested_device": args.device,
-                   "methods": methods, "threads": args.threads,
+        "environment": environment_metadata(
+            devices, open3d_version=o3d.__version__ if o3d is not None else None),
+        "config": {**asdict(config), "backend": args.backend, "devices": devices,
+                   "requested_device": args.device, "methods": methods,
+                   "open3d_metrics": args.open3d_metrics, "threads": args.threads,
                    "repeats": args.repeats, "warmup": args.warmup},
         "skipped": skipped,
         "pairs": [],
     }
-    print("Registration only; shared voxelization/FPFH excluded from timing.")
-    print(f"Input dtype: {args.dtype}; torchpcl: {', '.join(devices)}; "
+    print(f"Backend: {args.backend}; registration only. Preprocessing is torchpcl's "
+          "and excluded from timing.")
+    print(f"Input dtype: {args.dtype}; devices: {', '.join(devices)}; "
           f"threads: {args.threads}")
-    if "icp" in methods:
-        print(f"Open3D tensor ICP: {', '.join(open3d_devices)}/{args.dtype} points; float64 pose solver.")
-    if "fgr" in methods:
-        print("Open3D FGR: legacy CPU/float64 reference only; no matching tensor/CUDA API.")
+    if args.backend == "open3d" and "icp" in methods:
+        print("Open3D tensor ICP stores points at the requested dtype/device; "
+              "its pose solver is CPU float64.")
     for skip in skipped:
         print(f"Skipped {skip['backend']}/{skip['device']}: {skip['reason']}")
-    print(f"{'pair/method/backend/device':48} {'median ms':>10} {'min ms':>10} {'RAM MiB':>10} "
-          f"{'VRAM MiB':>10} {'rot deg':>10} {'trans':>10} {'GT RMSE':>10} {'fitness':>9}")
+    quality = f"{'fitness':>9}" if args.open3d_metrics else ""
+    print(f"{'pair/method/device':40} {'median ms':>10} {'min ms':>10} {'RAM MiB':>10} "
+          f"{'VRAM MiB':>10} {'rot deg':>10} {'trans':>10} {'GT RMSE':>10}{quality}")
     for directory in args.data:
         pair = prepare_pair(directory, config, with_features="fgr" in methods)
         pair_report = {**pair.metadata(), "results": []}
         report["pairs"].append(pair_report)
-        for method in methods:
-            baseline_devices = open3d_devices if method == "icp" else ["cpu"]
-            for backend, device in ([("torchpcl", d) for d in devices]
-                                    + [("open3d", d) for d in baseline_devices]):
-                case = make_case(pair, method, backend, device)
-                result = measure(case, repeats=args.repeats, warmup=args.warmup)
-                pair_report["results"].append(result)
-                median = result["median"]
-                memory = result["memory"]
-                device_text = format_optional(memory["device_peak_mib"])
-                label = f"{directory.name}/{method}/{backend}/{device}"
-                print(f"{label:48} {median['time_ms']:10.3f} "
-                      f"{result['time_ms_min']:10.3f} "
-                      f"{memory['process_rss_peak_mib']:10.1f} {device_text:>10} "
-                      f"{median['rotation_error_deg']:10.4f} "
-                      f"{median['translation_error']:10.5f} {median['source_displacement_rmse']:10.5f} "
-                      f"{median['fitness']:9.4f}", flush=True)
-                del case
+        for method, device in schedule:
+            case = make_case(pair, method, args.backend, device,
+                             open3d_metrics=args.open3d_metrics)
+            result = measure(case, repeats=args.repeats, warmup=args.warmup)
+            pair_report["results"].append(result)
+            median = result["median"]
+            memory = result["memory"]
+            device_text = format_optional(memory["device_peak_mib"])
+            label = f"{directory.name}/{method}/{device}"
+            print(f"{label:40} {median['time_ms']:10.3f} "
+                  f"{result['time_ms_min']:10.3f} "
+                  f"{memory['process_rss_peak_mib']:10.1f} {device_text:>10} "
+                  f"{median['rotation_error_deg']:10.4f} "
+                  f"{median['translation_error']:10.5f} "
+                  f"{median['source_displacement_rmse']:10.5f}"
+                  + (f"{median['fitness']:9.4f}" if args.open3d_metrics else ""),
+                  flush=True)
+            del case
     if args.json:
         write_json(report, args.json)
     return report

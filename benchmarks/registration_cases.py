@@ -42,21 +42,47 @@ class RegistrationConfig:
             raise ValueError("seed must be an integer in [0, 2**31)")
 
 
+# Preparation parameters, as multiples of the voxel size. They define the
+# workload rather than reproducing another library's: preparation is untimed
+# and both backends receive the same arrays, so these are a recorded choice.
+# `FEATURE_NEIGHBORS` is torchpcl's maximum; Open3D's own examples use 100.
+NORMAL_RADIUS = 2
+NORMAL_NEIGHBORS = 30
+FEATURE_RADIUS = 5
+FEATURE_NEIGHBORS = 64
+
+
 @dataclass
 class PreparedPair:
+    """Plain arrays, so a backend adapter builds its own objects from them.
+
+    Every array is quantized to the configured dtype and held as float64, so
+    both backends start from identical coordinate values whatever their own
+    storage is.
+    """
+
     directory: Path
     config: RegistrationConfig
     expected: np.ndarray
-    originals: tuple[Any, Any]
-    clouds: tuple[Any, Any]
-    features: tuple[Any, Any] | None
+    originals: tuple[np.ndarray, np.ndarray]
+    clouds: tuple[np.ndarray, np.ndarray]
+    features: tuple[np.ndarray, np.ndarray] | None
 
     def metadata(self):
         return {
             "directory": str(self.directory.resolve()),
-            "original_points": [len(c.points) for c in self.originals],
-            "registration_points": [len(c.points) for c in self.clouds],
+            "original_points": [len(points) for points in self.originals],
+            "registration_points": [len(points) for points in self.clouds],
             "ground_truth": self.expected.tolist(),
+            "preprocessing": {
+                "provider": "torchpcl",
+                "voxel_size": self.config.voxel_size,
+                "normal_radius": NORMAL_RADIUS * self.config.voxel_size,
+                "normal_neighbors": NORMAL_NEIGHBORS,
+                **({} if self.features is None else {
+                    "feature_radius": FEATURE_RADIUS * self.config.voxel_size,
+                    "feature_neighbors": FEATURE_NEIGHBORS}),
+            },
         }
 
 
@@ -77,34 +103,78 @@ def prepare_pair(directory: str | Path, config: RegistrationConfig, *, with_feat
 
 
 def prepare_cloud(path: Path, config: RegistrationConfig, *, with_features=True):
-    """Load one cloud and compute the shared, dtype-quantized benchmark inputs."""
-    import open3d as o3d
+    """Load one cloud and compute the shared, dtype-quantized benchmark inputs.
 
-    feature = None
+    torchpcl does the preprocessing, so a registration run needs no Open3D.
+    What it produces is the solver's input, not a measurement: it sits outside
+    every timed region and both backends receive it unchanged.
+    """
+    import torch
+    import torchpcl as tp
+
     if not path.is_file():
         raise FileNotFoundError(path)
-    original = o3d.io.read_point_cloud(str(path))
-    points = np.asarray(original.points)
-    if len(points) < 3 or not np.isfinite(points).all():
+    loaded = tp.load_ply(path, dtype=torch.float64)
+    original = loaded.points.numpy()
+    if len(original) < 3 or not np.isfinite(original).all():
         raise ValueError(f"{path}: expected at least three finite points")
-    cloud = original.voxel_down_sample(config.voxel_size)
-    if len(cloud.points) < 10:
+    centroids = tp.voxelize(loaded.points, config.voxel_size).reduce(
+        loaded.points, "mean")
+    if len(centroids) < 10:
         raise ValueError(f"{path}: fewer than 10 downsampled points; reduce voxel_size")
-    # Quantize shared inputs before promoting them to legacy Open3D's double
-    # storage. Both backends thus start from identical coordinate values.
-    cloud.points = o3d.utility.Vector3dVector(np.asarray(cloud.points).astype(config.dtype))
-    if with_features:
-        cloud.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(
-            radius=2 * config.voxel_size, max_nn=30))
-        cloud.orient_normals_towards_camera_location(np.zeros(3))
-        feature = o3d.pipelines.registration.compute_fpfh_feature(
-            cloud, o3d.geometry.KDTreeSearchParamHybrid(
-                radius=5 * config.voxel_size, max_nn=100))
-        feature.data = np.asarray(feature.data).astype(config.dtype).astype(np.float64)
-    return original, cloud, feature
+    # Quantize before promoting back to float64 storage, so a float32 run and a
+    # float64 run of the same configuration differ only where they should.
+    points = _quantize(centroids.numpy(), config)
+    if not with_features:
+        return original, points, None
+
+    dtype = getattr(torch, config.dtype)
+    quantized = torch.tensor(points, dtype=dtype)
+    normals = tp.estimate_normals(
+        quantized, NORMAL_RADIUS * config.voxel_size, k=NORMAL_NEIGHBORS).normals
+    oriented = tp.orient_normals_toward_viewpoint(
+        tp.PointCloud.from_points(quantized, normals=normals),
+        torch.zeros(3, dtype=dtype))
+    features = tp.fpfh(oriented, FEATURE_RADIUS * config.voxel_size,
+                       max_neighbors=FEATURE_NEIGHBORS)
+    return original, points, _quantize(features.descriptors.numpy(), config)
 
 
-def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu") -> Case:
+def _quantize(array: np.ndarray, config: RegistrationConfig) -> np.ndarray:
+    return array.astype(config.dtype).astype(np.float64)
+
+
+def _open3d_cloud(o3d, points: np.ndarray):
+    """A legacy Open3D cloud from shared points, built in the adapter."""
+    cloud = o3d.geometry.PointCloud()
+    cloud.points = o3d.utility.Vector3dVector(points)
+    return cloud
+
+
+def _open3d_feature(o3d, descriptors: np.ndarray):
+    """Open3D stores FPFH transposed: 33 rows by N columns."""
+    feature = o3d.pipelines.registration.Feature()
+    feature.data = descriptors.T.copy()
+    return feature
+
+
+def _open3d_quality(pair: PreparedPair, distance: float, estimate: np.ndarray) -> dict:
+    """Open3D's fitness and inlier RMSE, against the full-resolution clouds.
+
+    Pose error is scored against the dataset's ground truth and needs no other
+    implementation. These two do, so they are requested explicitly rather than
+    computed on every run.
+    """
+    import open3d as o3d
+
+    clouds = [_open3d_cloud(o3d, points) for points in pair.originals]
+    metrics = o3d.pipelines.registration.evaluate_registration(
+        *clouds, distance, estimate)
+    return {"fitness": metrics.fitness, "inlier_rmse": metrics.inlier_rmse}
+
+
+def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu",
+              *, open3d_metrics: bool = False) -> Case:
     """Allocate inputs/options once and return an independently reusable case."""
     if method not in ("icp", "fgr") or backend not in ("torchpcl", "open3d"):
         raise ValueError("expected method icp/fgr and backend torchpcl/open3d")
@@ -134,7 +204,7 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
             device_memory_reader = cuda_process_memory_reader()
         dtype = getattr(torch, config.dtype)
         clouds = [tp.PointCloud.from_points(torch.tensor(
-            np.asarray(cloud.points), dtype=dtype, device=device)) for cloud in pair.clouds]
+            points, dtype=dtype, device=device)) for points in pair.clouds]
         if method == "icp":
             init = torch.eye(4, dtype=dtype, device=device)
             levels = [tp.ICPLevel(max_correspondence_distance=distance, max_iterations=iterations)]
@@ -142,8 +212,8 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
                 return tp.icp(*clouds, levels, init=init)
         else:
             clouds = [cloud.with_features(torch.tensor(
-                np.asarray(feature.data).T, dtype=dtype, device=device
-            )) for cloud, feature in zip(clouds, pair.features)]
+                descriptors, dtype=dtype, device=device
+            )) for cloud, descriptors in zip(clouds, pair.features)]
             options = tp.FGROptions(max_correspondence_distance=distance,
                                     max_iterations=iterations, seed=config.seed)
             def run():
@@ -160,8 +230,8 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
             o3d_device = o3d.core.Device("CUDA:0" if device == "cuda" else "CPU:0")
             o3d_dtype = o3d.core.Dtype.Float32 if config.dtype == "float32" else o3d.core.Dtype.Float64
             clouds = [o3d.t.geometry.PointCloud(o3d.core.Tensor(
-                np.asarray(cloud.points), dtype=o3d_dtype, device=o3d_device
-            )) for cloud in pair.clouds]
+                points, dtype=o3d_dtype, device=o3d_device
+            )) for points in pair.clouds]
             # Open3D's tensor ICP API keeps its pose in CPU float64, even for
             # float32 clouds on CUDA. Point storage/search use the selected dtype/device.
             init = o3d.core.Tensor.eye(4, o3d.core.Dtype.Float64, o3d.core.Device("CPU:0"))
@@ -175,17 +245,20 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
                 maximum_correspondence_distance=distance, iteration_number=iterations,
                 decrease_mu=True, division_factor=1.4, use_absolute_scale=False,
                 tuple_scale=0.95, maximum_tuple_count=1000, tuple_test=True)
+            clouds = [_open3d_cloud(o3d, points) for points in pair.clouds]
+            features = [_open3d_feature(o3d, descriptors)
+                        for descriptors in pair.features]
             def run():
                 return registration.registration_fgr_based_on_feature_matching(
-                    *pair.clouds, *pair.features, options)
+                    *clouds, *features, options)
 
     def reset():
-        import open3d as o3d
-        o3d.utility.random.seed(config.seed)
+        # Only Open3D carries global solver state; torchpcl seeds per call.
+        if backend == "open3d":
+            import open3d as o3d
+            o3d.utility.random.seed(config.seed)
 
     def evaluate(result):
-        import open3d as o3d
-
         if backend == "torchpcl":
             estimate = result.transforms[0].detach().cpu().numpy()
         elif method == "icp":
@@ -194,15 +267,15 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
             estimate = np.asarray(result.transformation)
         if not np.isfinite(estimate).all():
             raise ValueError(f"{method}/{backend}/{device}: non-finite transform")
-        metrics = o3d.pipelines.registration.evaluate_registration(
-            *pair.originals, distance, estimate)
-        return {
-            **pose_errors(estimate, pair.expected, np.asarray(pair.originals[0].points)),
-            "fitness": metrics.fitness, "inlier_rmse": metrics.inlier_rmse,
+        metrics = {
+            **pose_errors(estimate, pair.expected, pair.originals[0]),
             "transform": estimate.tolist(),
             "solver_success": bool(result.success.item())
             if backend == "torchpcl" and method == "fgr" else None,
         }
+        if open3d_metrics:
+            metrics.update(_open3d_quality(pair, distance, estimate))
+        return metrics
 
     return Case(
         name=method, backend=backend, device=device,

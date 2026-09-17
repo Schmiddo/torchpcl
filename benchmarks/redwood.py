@@ -23,6 +23,9 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=Path("data"))
     parser.add_argument("--scenes", nargs="+", choices=SCENES, default=list(SCENES))
+    parser.add_argument("--backend", choices=["torchpcl", "open3d"], default="torchpcl")
+    parser.add_argument("--open3d-metrics", action="store_true",
+                        help="also report Open3D fitness and inlier RMSE; needs Open3D")
     parser.add_argument("--device", choices=["all", "cpu", "cuda"], default="all",
                         help="torchpcl devices; Open3D FGR always uses CPU")
     parser.add_argument("--dtype", choices=["float32", "float64"], default="float32")
@@ -49,13 +52,20 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     configure_threads(args.threads)
-    o3d = require_open3d()
+    needs_open3d = args.backend == "open3d" or args.open3d_metrics
+    o3d = require_open3d() if needs_open3d else None
     import torch
-    from torchpcl import _C
 
     torch.set_num_threads(args.threads)
+    if args.backend == "torchpcl":
+        from torchpcl import _C
+
+        cuda_available = torch.cuda.is_available() and _C.has_cuda()
+    else:
+        # Open3D FGR is legacy CPU only, so CUDA is never available to it here.
+        cuda_available = False
     try:
-        devices, skipped = select_devices(args.device, torch.cuda.is_available() and _C.has_cuda())
+        devices, skipped = select_devices(args.device, cuda_available, backend=args.backend)
     except ValueError as error:
         raise SystemExit(str(error)) from error
     config = RegistrationConfig(voxel_size=args.voxel_size, dtype=args.dtype, seed=args.seed,
@@ -73,7 +83,8 @@ def main(argv=None):
             if not path.is_file():
                 raise SystemExit(f"Missing {path}; run `just download-data` first")
     report = {
-        "environment": environment_metadata(devices, open3d_version=o3d.__version__),
+        "environment": environment_metadata(
+            devices, open3d_version=o3d.__version__ if o3d is not None else None),
         "config": {**asdict(config), "data": str(args.data.resolve()), "scenes": args.scenes,
                    "devices": devices, "requested_device": args.device,
                    "threads": args.threads, "repeats": args.repeats, "warmup": args.warmup,
@@ -85,7 +96,8 @@ def main(argv=None):
         "skipped": skipped, "scenes": [],
     }
     print("Redwood FGR: GT pairs only; registration recall, not detection precision.")
-    print("Shared voxelization/FPFH excluded from timing. Open3D: CPU/float64 reference.")
+    print(f"Backend: {args.backend}. Preprocessing is torchpcl's and excluded from "
+          "timing; recall is scored against the dataset's ground truth.")
     if args.max_pairs:
         print(f"Subset run: at most {args.max_pairs} pairs per scene; recall is subset-only.")
     for skip in skipped:
@@ -106,8 +118,10 @@ def main(argv=None):
             pair = PreparedPair(args.data / f"{scene}-fragments-ply", config, truth.transform,
                                 (source[0], target[0]), (source[1], target[1]),
                                 (source[2], target[2]))
-            for backend, device in [("torchpcl", d) for d in devices] + [("open3d", "cpu")]:
-                case = make_case(pair, truth, backend, device)
+            for device in devices:
+                backend = args.backend
+                case = make_case(pair, truth, backend, device,
+                                 open3d_metrics=args.open3d_metrics)
                 result = measure(case, repeats=args.repeats, warmup=args.warmup)
                 result["pair"] = pair.metadata()
                 scene_report["results"].append(result)

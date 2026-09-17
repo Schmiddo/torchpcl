@@ -52,11 +52,31 @@ def rows(report: dict) -> dict[tuple[str, ...], dict]:
     directory name, matching the label that script prints.
     """
     if "results" in report:
-        return {key(result): result for result in report["results"]}
-    return {
-        (Path(pair["directory"]).name, *key(result)): result
+        return unique((key(result), result) for result in report["results"])
+    return unique(
+        ((Path(pair["directory"]).name, *key(result)), result)
         for pair in report["pairs"] for result in pair["results"]
-    }
+    )
+
+
+def unique(entries) -> dict[tuple[str, ...], dict]:
+    """Index rows by key, refusing to let one silently replace another.
+
+    No current driver can emit a repeated key: one invocation runs one
+    configuration, and its operations, backend and devices are each distinct.
+    A sweep would break that -- several rows sharing a name and differing only
+    in a parameter -- and the comparison would then quietly report whichever
+    row happened to land last. That is a wrong number rather than an error, so
+    it is rejected here. A sweep needs the key to carry the parameter that
+    varies, not a relaxation of this check.
+    """
+    indexed = {}
+    for entry, result in entries:
+        if entry in indexed:
+            raise SystemExit(f"duplicate row {'/'.join(entry)}: a report must "
+                             "identify each row uniquely")
+        indexed[entry] = result
+    return indexed
 
 
 def key(result: dict) -> tuple[str, str, str]:

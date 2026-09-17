@@ -1,8 +1,8 @@
 set positional-arguments
 
-# Run the registration benchmark in a separate Python 3.12 environment.
+# Measure ICP/FGR in the project environment (torchpcl by default).
 benchmark-registration *args:
-    CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group baseline python benchmarks/registration.py "$@"
+    uv run --group benchmark python benchmarks/registration.py "$@"
 
 # Measure sampling in the project environment (torchpcl by default).
 benchmark-sampling *args:
@@ -26,15 +26,21 @@ benchmark *args:
 
 # Check torchpcl against Open3D and brute force. No timing; needs the Open3D env.
 benchmark-accuracy *args:
-    UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group baseline python benchmarks/accuracy.py "$@"
+    just benchmark-baseline accuracy "$@"
+
+# Run any benchmark script in the Python 3.12 Open3D environment, for the two
+# things Open3D is still for: `--backend open3d` baselines and accuracy checks.
+benchmark-baseline script *args:
+    shift; CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group baseline python benchmarks/{{script}}.py "$@"
 
 # Diff two saved --json reports; needs neither Open3D nor the benchmark env.
 benchmark-compare before after *args:
     uv run python benchmarks/compare.py "$@"
 
-# Evaluate FGR on Redwood ground-truth fragment pairs against Open3D.
+# Evaluate FGR recall on Redwood ground-truth pairs. Ground truth comes from
+# the dataset, so this needs no Open3D.
 benchmark-redwood *args:
-    UV_PROJECT_ENVIRONMENT=.venv-benchmark uv run --python 3.12 --group baseline python benchmarks/redwood.py "$@"
+    uv run --group benchmark python benchmarks/redwood.py "$@"
 
 download-data:
     #!/usr/bin/env bash

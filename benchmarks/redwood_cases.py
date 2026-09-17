@@ -96,8 +96,10 @@ def transformation_error(estimate, expected, information):
     return float(max(0., error @ information @ error / information[0, 0]))
 
 
-def make_case(pair: PreparedPair, truth: GroundTruth, backend, device="cpu"):
-    case = registration_case(pair, "fgr", backend, device)
+def make_case(pair: PreparedPair, truth: GroundTruth, backend, device="cpu",
+              *, open3d_metrics: bool = False):
+    case = registration_case(pair, "fgr", backend, device,
+                             open3d_metrics=open3d_metrics)
     evaluate_registration = case.evaluate
 
     def evaluate(result):

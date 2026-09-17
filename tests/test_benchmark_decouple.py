@@ -182,6 +182,25 @@ def test_cross_backend_comparison_offline(tmp_path):
         compare.main([*map(str, paths), "--before-backend", "missing", "--after-backend", "torchpcl"])
 
 
+def test_duplicate_row_keys_are_rejected_rather_than_overwritten(tmp_path):
+    """A repeated key would silently report whichever row landed last.
+
+    No driver emits one today; a parameter sweep would, and the wrong number
+    it produces is worse than an error.
+    """
+    def row(name, time):
+        return {"name": name, "backend": "torchpcl", "device": "cpu",
+                "median": {"time_ms": time}, "time_ms_min": time,
+                "time_ms_max": time}
+
+    report = {"config": {}, "results": [row("knn", 10), row("knn", 20)]}
+    path = tmp_path / "swept.json"
+    path.write_text(json.dumps(report))
+
+    with pytest.raises(SystemExit, match="duplicate row knn/torchpcl/cpu"):
+        compare.rows(compare.load(path))
+
+
 @pytest.mark.parametrize("options", [["--before-backend", "open3d"],
                                       ["--backend", "torchpcl", "--before-backend", "open3d",
                                        "--after-backend", "torchpcl"]])

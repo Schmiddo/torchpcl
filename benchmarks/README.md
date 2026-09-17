@@ -21,21 +21,42 @@ no reference output of any kind. The test suite needs neither Open3D nor a
 baseline environment; registration evaluation still has its own scoring.
 
 Every benchmark shares the `Case`/`measure` contract described below.
-Registration and Redwood remain separate workflows requiring Open3D. Accuracy
-is checked by its own command, never by a benchmark and never by the test
-suite; see "Accuracy checking" below.
+Registration and Redwood are separate workflows but run in the same
+environment as everything else. Accuracy is checked by its own command, never by
+a benchmark and never by the test suite; see "Accuracy checking" below.
 
 ## Registration benchmarks
 
-Compare torchpcl with Open3D on pairs with a known rigid transform. Run from
-the repository root. Open3D needs Python 3.12 with the current dependency set;
-use a separate environment to preserve the project's default Python environment.
-This is also the environment for refreshing operation/sampling Open3D baselines:
+Measure ICP and FGR on pairs with a known rigid transform:
+
+```bash
+just benchmark-registration --json runs/registration.json
+```
+
+Preprocessing -- voxel downsampling, normals and FPFH -- is torchpcl's and runs
+in the project environment, so this needs no Open3D. What it produces is the
+solver's input, not a measurement: it sits outside every timed region and both
+backends receive the same arrays unchanged. The parameters are recorded under
+`preprocessing` in each pair's report, including `feature_neighbors`, which is
+64 because that is torchpcl's maximum. That is a recorded choice rather than a
+reproduction of any other library's; changing it changes the workload and
+invalidates earlier baselines.
+
+Open3D remains available for its two roles, both in the Python 3.12 baseline
+environment:
+
+```bash
+just benchmark-baseline registration --backend open3d   # the baseline to beat
+just benchmark-registration --open3d-metrics            # adds fitness/inlier RMSE
+```
+
+The second still needs that environment, so run it through
+`just benchmark-baseline registration --open3d-metrics`. Set up the environment
+once with:
 
 ```bash
 CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark \
     uv sync --python 3.12 --group baseline
-.venv-benchmark/bin/python benchmarks/registration.py --json results-registration.json
 ```
 
 `CC`/`CXX` are needed because uv's managed CPython 3.12 is itself built with
@@ -145,14 +166,20 @@ ground-truth errors, especially for failed alignments with low inlier RMSE.
 
 ## Redwood registration benchmark
 
-Download the four Redwood scenes and compare torchpcl FGR with Open3D FGR:
+Download the four Redwood scenes and measure FGR recall against their ground
+truth:
 
 ```bash
 just download-data
-just benchmark-redwood --json results-redwood.json
+just benchmark-redwood --json runs/redwood.json
 # Short CPU smoke test:
 just benchmark-redwood --scenes livingroom1 --device cpu --max-pairs 2 --threads 2
 ```
+
+Ground truth comes from the dataset, not from another library, so recall needs
+no baseline implementation and this runs in the project environment. Use
+`--backend open3d` through `just benchmark-baseline redwood` for the comparison
+baseline.
 
 The runner expects `data/<scene>-fragments-ply/cloud_bin_<index>.ply` and
 `data/<scene>-evaluation/{gt.log,gt.info}`, as produced by the download recipe.
@@ -168,10 +195,10 @@ vector part into `e`, and accept `e.T @ info @ e / info[0,0] <= 0.04`.
 This preserves the reference quaternion convention, rather than replacing it
 with a rotation vector or raw cloud RMSE. Solver completion alone is not success.
 
-Both cases reuse the registration benchmark's shared voxelization/FPFH and FGR
+Both cases reuse the registration benchmark's shared preprocessing and FGR
 settings. Timing excludes preprocessing, transfers, and GT evaluation. Open3D
-is a CPU/float64 reference; `--device` selects torchpcl devices, defaulting to
-CPU and available CUDA. One warmup and one measured repeat are used per pair,
+FGR, when selected, is a CPU/float64 baseline; `--device` selects devices,
+defaulting to CPU and available CUDA. One warmup and one measured repeat are used per pair,
 plus the runner's separate memory-sampling call. Set `--repeats`, `--warmup`,
 `--dtype`, `--voxel-size`, `--fgr-distance`, `--fgr-iterations`, or `--seed` as needed.
 An eight-fragment cache bounds retained preprocessing data.
@@ -413,12 +440,26 @@ does not prove absence of regression. Old reports' changed accuracy metrics
 remain visible in history mode. A `-dirty` revision cannot be reproduced from
 its commit hash alone.
 
+Each row must be uniquely identified by name, backend and device; a report
+containing the same row twice is rejected rather than silently compared against
+whichever copy landed last. No driver emits one today. A parameter sweep would,
+and would need the swept parameter in the key.
+
 `compare.py` uses only the standard library. It can run without project
 dependencies or either backend:
 
 ```bash
 python3 benchmarks/compare.py runs/before.json runs/after.json
 ```
+
+### When to refresh a baseline
+
+Refresh a performance baseline when the workload, the adapter, the hardware or
+a relevant runtime setting changes. Age alone does not invalidate one, and
+recent controlled runs from separate environments stay comparable as long as
+their provenance and workload differences are explicit. Accuracy reports have a
+different trigger: re-accept them after an Open3D upgrade. Neither kind
+invalidates the other.
 
 ## Architecture
 
