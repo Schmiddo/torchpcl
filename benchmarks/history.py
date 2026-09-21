@@ -3,7 +3,9 @@
 `runs/` is scratch: every invocation writes a fresh report there and the
 directory is ignored, so nothing accumulates. This script copies the rows you
 decide to keep into `benchmarks/history/<machine>.jsonl`, one flat row per
-result, which is what `dashboard.py` plots.
+result, which is what `dashboard.py` plots. The machine is a label describing
+the hardware -- these files are committed, and a hostname is not something a
+repository should publish.
 
 Promotion is deliberately manual. A benchmark number is only worth keeping when
 you know the machine was quiet and the configuration was the standard one; that
@@ -30,6 +32,11 @@ from benchmarks.compare import rows as report_rows
 DEFAULT_HISTORY = Path(__file__).resolve().parent / "history"
 #: Digest -> stable config, so a chart can say what a digest means.
 CONFIGS = "configs.json"
+#: Where points from a report written before machine labels existed land.
+#: Timings only compare within one computer, but refusing a whole report for
+#: want of a group name loses more than it protects; `add` says when it has
+#: had to fall back, and `--machine LABEL` splits them apart again.
+UNKNOWN_MACHINE = "unknown-machine"
 
 #: Config fields that describe *which* subset ran or *where* it ran, rather
 #: than what work was done. Two runs differing only in these measure the same
@@ -53,7 +60,10 @@ def parse_args(argv=None):
 
     add = commands.add_parser("add", help="promote reports into the history")
     add.add_argument("reports", type=Path, nargs="+")
-    add.add_argument("--machine", help="override the report's recorded machine name")
+    add.add_argument("--machine",
+                     help="label these points with LABEL instead of the report's "
+                          "own machine label (which describes the hardware, not "
+                          "the hostname)")
     add.add_argument("--note", help="free-text label stored with every added row")
     add.add_argument("--allow-dirty", action="store_true",
                      help="accept a report measured on a dirty working tree")
@@ -66,6 +76,11 @@ def parse_args(argv=None):
     drop = commands.add_parser("drop", help="remove every point of one revision")
     drop.add_argument("revision")
     drop.add_argument("--machine")
+
+    relabel = commands.add_parser(
+        "relabel", help="rename a stored machine, e.g. off a hostname")
+    relabel.add_argument("old")
+    relabel.add_argument("new")
 
     return parser.parse_args(argv)
 
@@ -184,11 +199,7 @@ def flatten(report: dict, path: Path, *, machine: str | None, note: str | None):
         suite, variant = suite_of(report)
     except SystemExit as error:
         raise SystemExit(f"{path}: {error}") from error
-    name = machine or environment.get("machine")
-    if not name:
-        raise SystemExit(
-            f"{path}: no machine recorded (an older report); pass --machine NAME "
-            "so its points are not mixed with another computer's")
+    name = machine or environment.get("machine") or UNKNOWN_MACHINE
     digest = config_digest(report["config"])
     shared = {
         "machine": name,
@@ -287,6 +298,10 @@ def add(args) -> int:
                                      tuple(row["key"])))
         write_history(path, stored)
         print(f"{path}: {len(stored)} points")
+    if UNKNOWN_MACHINE in per_machine:
+        print(f"{UNKNOWN_MACHINE}: the report records no machine, so these "
+              "points share a series with every other unlabelled computer's. "
+              "Pass --machine LABEL to keep them apart.")
     write_configs(args.history, configs)
     print(f"added {added}, replaced {replaced}, skipped {skipped} already present")
     if skipped and not args.replace:
@@ -335,9 +350,34 @@ def drop(args) -> int:
     return 0
 
 
+def relabel(args) -> int:
+    """Move one machine's points under a different label.
+
+    The label groups points that may share a line, so renaming one is a move
+    of the whole file. Merging into an existing label is refused: two computers
+    silently joined onto one series is the failure the label exists to prevent.
+    """
+    source = history_path(args.history, args.old)
+    target = history_path(args.history, args.new)
+    if not source.is_file():
+        raise SystemExit(f"{source}: no history stored for {args.old!r}")
+    if target.exists() and target != source:
+        raise SystemExit(f"{target}: already holds points; merging two machines "
+                         "onto one series would compare different hardware")
+    rows = read_history(source)
+    for row in rows:
+        row["machine"] = args.new
+    write_history(target, rows)
+    if target != source:
+        source.unlink()
+    print(f"{target}: {len(rows)} points relabelled {args.old!r} -> {args.new!r}")
+    return 0
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
-    return {"add": add, "list": listing, "drop": drop}[args.command](args)
+    return {"add": add, "list": listing, "drop": drop,
+            "relabel": relabel}[args.command](args)
 
 
 if __name__ == "__main__":

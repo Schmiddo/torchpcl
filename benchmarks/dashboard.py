@@ -1,8 +1,11 @@
 """Render the saved benchmark history as one self-contained HTML page.
 
-`history.py` keeps the points; this turns them into charts you can open in a
-browser with no server, no network and no dependencies -- the data is embedded
-in the file, so it can be copied around or attached to a message and still work.
+`history.py` keeps the points; this turns them into charts. By default it
+serves them over HTTP, re-rendering on each request so a newly kept point needs
+only a reload -- and so the page can be read from another computer. With
+`--out` it writes the same page to a file instead: the data is embedded in it,
+so that copy needs no server, no network and no dependencies and can be
+attached to a message and still work.
 
 One card per measured case, at most three lines on it: torchpcl and whichever
 baselines were run for the same case. Each line carries its measured min/max as
@@ -15,8 +18,10 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import socket
 import sys
 
 if __package__ in (None, ""):
@@ -25,6 +30,8 @@ if __package__ in (None, ""):
 from benchmarks.history import DEFAULT_HISTORY, read_configs, read_history
 
 DEFAULT_OUTPUT = Path("runs/dashboard.html")
+#: Unlikely to collide with a development server already on the box.
+DEFAULT_PORT = 8765
 
 #: Categorical slots 1-3 of the reference palette, which validate all-pairs in
 #: both modes. Assignment is by backend identity, never by position, so a
@@ -45,7 +52,15 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--history", type=Path, default=DEFAULT_HISTORY)
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--out", type=Path, nargs="?", const=DEFAULT_OUTPUT,
+                        help=f"write the page to PATH (default: {DEFAULT_OUTPUT}) "
+                             "and exit, instead of serving it")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="address to serve on; 127.0.0.1 to keep it on this "
+                             "machine (default: %(default)s)")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
+                        help="port to serve on, 0 to pick a free one "
+                             "(default: %(default)s)")
     parser.add_argument("--machine", help="render only one machine's history")
     return parser.parse_args(argv)
 
@@ -198,13 +213,108 @@ def render(data: dict) -> str:
     return TEMPLATE.replace("__DATA__", json.dumps(data, allow_nan=False))
 
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
+def build(args) -> tuple[str, str]:
+    """The rendered page, and one line describing what went into it."""
     rows = load_rows(args.history, args.machine)
     data = page_data(rows, read_configs(args.history))
+    return render(data), f"{len(data['charts'])} charts from {len(rows)} points"
+
+
+def lan_address() -> str | None:
+    """This host's address on the network it routes through, for the printed URL.
+
+    Connecting from a laptop needs an address, and `gethostname` often resolves
+    to loopback. The socket is unconnected UDP: it sends nothing, it only asks
+    the routing table which interface would be used.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))  # TEST-NET-1: routable, never routed to
+            return probe.getsockname()[0]
+    except OSError:
+        return None
+
+
+def handler_class(args):
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        server_version = "torchpcl-dashboard"
+
+        def do_GET(self):
+            body, status = self.page()
+            self.respond(status, body)
+            self.wfile.write(body)
+
+        def do_HEAD(self):
+            body, status = self.page()
+            self.respond(status, body)
+
+        def page(self) -> tuple[bytes, int]:
+            # Rendered per request, not once at startup: keeping a new point
+            # while the server runs should need a browser refresh, not a
+            # restart. The history is a few hundred short lines, so re-reading
+            # it costs less than the page transfer does.
+            if self.path.split("?")[0] not in ("/", "/index.html"):
+                return b"not found\n", 404
+            try:
+                page, summary = build(args)
+            except SystemExit as error:  # an emptied or missing history
+                return f"{error}\n".encode(), 503
+            self.summary = summary
+            return page.encode(), 200
+
+        def respond(self, status: int, body: bytes) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type",
+                             "text/html; charset=utf-8" if status == 200
+                             else "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            # The page carries its data inline, so a cached copy is a stale
+            # copy; refreshing must show the points added since.
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+        def log_message(self, fmt, *rest):
+            if self.command == "GET" and getattr(self, "summary", None):
+                print(f"served {self.summary} to {self.address_string()}",
+                      flush=True)
+
+    return Handler
+
+
+def serve(args) -> int:
+    page, summary = build(args)  # fail before binding if the history cannot render
+    del page
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), handler_class(args))
+    except OSError as error:
+        raise SystemExit(f"cannot serve on {args.host}:{args.port}: {error}") from error
+    port = server.server_address[1]
+    address = lan_address() if args.host in ("0.0.0.0", "::") else None
+    print(f"{args.history}: {summary}")
+    print(f"  http://localhost:{port}/")
+    if address:
+        print(f"  http://{address}:{port}/   (this machine on the network)")
+    # Flushed because this is the whole user interface, and a `just` recipe
+    # piped into anything but a terminal would otherwise buffer it away.
+    print("Ctrl-C to stop; the page re-renders on every reload.", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.server_close()
+    return 0
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    if args.out is None:
+        return serve(args)
+    page, summary = build(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(render(data))
-    print(f"{args.out}: {len(data['charts'])} charts from {len(rows)} points")
+    args.out.write_text(page)
+    print(f"{args.out}: {summary}")
     return 0
 
 

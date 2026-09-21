@@ -86,7 +86,8 @@ benchmark-compare before after *args:
 benchmark-keep *args:
     uv run python benchmarks/history.py add "$@"
 
-# Re-render runs/dashboard.html from the kept history.
+# Serve the kept history as a dashboard, re-rendered on every reload. Reachable
+# from another computer; pass --out to write runs/dashboard.html instead.
 benchmark-dashboard *args:
     uv run python benchmarks/dashboard.py "$@"
 
