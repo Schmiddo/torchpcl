@@ -508,13 +508,16 @@ just benchmark-dashboard             # serves the history on :8770
 ```
 
 `history.py add` flattens a report into one row per result and appends it to
-`benchmarks/history/<machine>.jsonl`, which git tracks -- unlike `runs/`,
-which is ignored and disposable. The machine is a label for the computer that
+`benchmarks/history/<machine>.jsonl`, which outlives the run -- unlike `runs/`,
+which is ignored and disposable. Whether that directory is committed, kept
+locally or synced some other way is an open question; the format is a plain
+JSONL row per point either way. The machine is a label for the computer that
 measured the points, derived from its processor (`linux-amd-ryzen-9-7950x`)
-rather than its hostname: timings compare only within one computer, but these
-files are committed and a machine's name is nobody else's business. Two boxes
-with the same processor would collide; set `$TORCHPCL_BENCHMARK_MACHINE` on one
-of them, or fix a stored label afterwards with `history.py relabel OLD NEW`.
+rather than its hostname: timings compare only within one computer, so the
+label has to exist, but a file that may be shared or committed later is no
+place for a machine's name. Two boxes with the same processor would collide;
+set `$TORCHPCL_BENCHMARK_MACHINE` on one of them, or fix a stored label
+afterwards with `history.py relabel OLD NEW`.
 Promotion is manual on purpose: a number is
 worth keeping only when the machine was quiet and the configuration was the
 standard one, and no runner can judge that. `history.py list` shows what is

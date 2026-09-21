@@ -4,8 +4,8 @@
 directory is ignored, so nothing accumulates. This script copies the rows you
 decide to keep into `benchmarks/history/<machine>.jsonl`, one flat row per
 result, which is what `dashboard.py` plots. The machine is a label describing
-the hardware -- these files are committed, and a hostname is not something a
-repository should publish.
+the hardware, not the hostname: these files outlive the run and may be shared
+or committed, and a machine's name has no business travelling with them.
 
 Promotion is deliberately manual. A benchmark number is only worth keeping when
 you know the machine was quiet and the configuration was the standard one; that

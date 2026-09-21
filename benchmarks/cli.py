@@ -136,9 +136,9 @@ def machine_label() -> str:
     hardware rather than its hostname.
 
     Timings compare only within one computer, so a history still has to know
-    which one -- but a hostname is a name that ends up committed and shared,
-    and it says nothing about *why* two numbers are comparable. The processor
-    does. Two boxes with the same processor collide; set ``$%s`` to tell them
+    which one -- but a hostname is a name that travels with every file the
+    measurement lands in, and it says nothing about *why* two numbers are
+    comparable. The processor does. Two boxes with the same processor collide; set ``$%s`` to tell them
     apart. Deliberately independent of PyTorch and of the selected devices, so
     the CPU-only baseline environment labels a machine exactly as the CUDA one
     does and their points share a card.
@@ -166,8 +166,8 @@ def environment_metadata(devices: list[str], *, open3d_version: str | None = Non
         # Which computer measured this. Timings are only comparable within one
         # machine, so a saved history keys its series on this; `compare.py`
         # has always printed the field. It is a hardware description, never the
-        # hostname: the histories are committed, and a machine's name is not
-        # something a repository should publish.
+        # hostname: a kept history may be shared or committed later, and a
+        # machine's name has no business travelling with it.
         "machine": machine_label(),
         "python": platform.python_version(),
         "platform": platform.platform(),

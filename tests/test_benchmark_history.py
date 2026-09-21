@@ -102,7 +102,7 @@ def test_the_dashboard_keeps_incomparable_configurations_on_separate_cards(tmp_p
 
 
 def test_a_machine_label_describes_the_hardware_rather_than_the_host():
-    """The histories are committed, so the label must not be a hostname."""
+    """A kept history may be shared, so the label must not be a hostname."""
     assert cli.machine_label() != cli.platform.node().lower()
     assert cli.machine_label() == cli.slug(cli.machine_label())
 
