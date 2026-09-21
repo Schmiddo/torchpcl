@@ -504,7 +504,7 @@ scripts answer "how has this moved", across many:
 ```bash
 just benchmark                       # writes runs/<timestamp>-*.json
 just benchmark-keep runs/20260917T101500Z-operations-random.json
-just benchmark-dashboard             # serves the history on :8765
+just benchmark-dashboard             # serves the history on :8770
 ```
 
 `history.py add` flattens a report into one row per result and appends it to
@@ -552,10 +552,11 @@ By default it serves that page over HTTP and re-renders it on every request,
 so a newly kept point needs a browser reload rather than a restart, and the
 history can be read from a laptop while the benchmarks run on the machine with
 the GPU. It binds every interface for that reason; `--host 127.0.0.1` keeps it
-on the local machine, and `--port` moves it off 8765.
+on the local machine, and `--port` moves it off 8770 when something already
+has that one.
 
 ```bash
-just benchmark-dashboard                      # http://<this machine>:8765/
+just benchmark-dashboard                      # http://<this machine>:8770/
 just benchmark-dashboard --host 127.0.0.1     # this machine only
 just benchmark-dashboard --out                # write runs/dashboard.html, don't serve
 ```

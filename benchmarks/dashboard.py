@@ -30,8 +30,9 @@ if __package__ in (None, ""):
 from benchmarks.history import DEFAULT_HISTORY, read_configs, read_history
 
 DEFAULT_OUTPUT = Path("runs/dashboard.html")
-#: Unlikely to collide with a development server already on the box.
-DEFAULT_PORT = 8765
+#: Unlikely to collide with a development server already on the box -- 8000
+#: and 8765 routinely are not.
+DEFAULT_PORT = 8770
 
 #: Categorical slots 1-3 of the reference palette, which validate all-pairs in
 #: both modes. Assignment is by backend identity, never by position, so a
@@ -288,7 +289,9 @@ def serve(args) -> int:
     try:
         server = ThreadingHTTPServer((args.host, args.port), handler_class(args))
     except OSError as error:
-        raise SystemExit(f"cannot serve on {args.host}:{args.port}: {error}") from error
+        raise SystemExit(f"cannot serve on {args.host}:{args.port}: {error}"
+                         "\nPass --port N for a free one, or --port 0 to be "
+                         "given one.") from error
     port = server.server_address[1]
     address = lan_address() if args.host in ("0.0.0.0", "::") else None
     print(f"{args.history}: {summary}")
