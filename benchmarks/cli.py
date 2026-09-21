@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -98,6 +99,55 @@ def source_revision() -> str | None:
     return revision + "-dirty" if dirty.stdout.strip() else revision
 
 
+#: Environment variable overriding the derived machine label, for the case the
+#: derivation cannot handle: two boxes with the same processor.
+MACHINE_ENV = "TORCHPCL_BENCHMARK_MACHINE"
+
+
+#: Trademark noise and clock speed in a /proc model name: neither identifies
+#: the hardware, and both make the label unreadable.
+CPU_NOISE = re.compile(r"\(R\)|\(TM\)|\bCPU\b|\bProcessor\b|@.*$", re.IGNORECASE)
+
+
+def slug(text: str) -> str:
+    """Lowercase, dash-joined, safe as both a filename and a chart label."""
+    kept = "".join(c if c.isalnum() else "-" for c in text.lower())
+    return "-".join(part for part in kept.split("-") if part)
+
+
+def processor_model() -> str | None:
+    """The CPU's marketing name, e.g. ``AMD Ryzen 9 7950X``.
+
+    `platform.processor()` merely repeats the architecture on Linux, so read
+    the model out of /proc; everything else falls back to the architecture.
+    """
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            key, _, value = line.partition(":")
+            if key.strip() in ("model name", "Model"):
+                return CPU_NOISE.sub(" ", value).strip()
+    except OSError:
+        pass
+    return platform.processor() or None
+
+
+def machine_label() -> str:
+    """A stable name for the computer that measured this, derived from its
+    operating system and processor.
+
+    Timings compare only within one computer, so a history has to know which
+    one. Two boxes with the same processor collide; set ``$%s`` to tell them
+    apart. Deliberately independent of PyTorch and of the selected devices, so
+    the CPU-only baseline environment labels a machine exactly as the CUDA one
+    does and their points share a card.
+    """ % MACHINE_ENV
+    override = os.environ.get(MACHINE_ENV, "").strip()
+    if override:
+        return slug(override)
+    parts = [platform.system(), processor_model() or platform.machine()]
+    return slug("-".join(part for part in parts if part)) or "unknown"
+
+
 def environment_metadata(devices: list[str], *, open3d_version: str | None = None,
                          small_gicp_version: str | None = None) -> dict:
     """Interpreter, platform, library versions, and run identity for the report.
@@ -111,6 +161,10 @@ def environment_metadata(devices: list[str], *, open3d_version: str | None = Non
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "revision": source_revision(),
         "command": sys.argv,
+        # Which computer measured this. Timings are only comparable within one
+        # machine, so a saved history keys its series on this; `compare.py`
+        # has always printed the field.
+        "machine": machine_label(),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "torch": torch.__version__,
@@ -136,6 +190,7 @@ __all__ = [
     "default_threads",
     "environment_metadata",
     "format_optional",
+    "machine_label",
     "positive_float",
     "positive_int",
     "require_open3d",

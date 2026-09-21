@@ -24,6 +24,51 @@ benchmark *args:
     just benchmark-operations --json "runs/$stamp-operations-random.json" "$@"
     echo "Reports: runs/$stamp-*.json"
 
+# Run the self-contained sweep on the GPU only.
+benchmark-gpu *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # An explicit --device cuda errors out on a build without CUDA, where the
+    # default --device all would quietly measure the CPU alone and leave you
+    # comparing a GPU run against a CPU one.
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p runs
+    just benchmark-sampling --device cuda --json "runs/$stamp-sampling-cuda.json" "$@"
+    just benchmark-operations --device cuda \
+        --json "runs/$stamp-operations-random-cuda.json" "$@"
+    echo "Reports: runs/$stamp-*-cuda.json"
+
+# Measure every third-party baseline on the self-contained workloads.
+benchmark-baselines *args:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    # Each backend selects the devices it supports, so this covers the GPU
+    # wherever Open3D has one and records small-gicp's CPU-only skip. One leg
+    # failing must not lose the legs that already measured, so they are all
+    # attempted and the failures reported at the end.
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p runs
+    extra=("$@")
+    failed=()
+    # script, backend, report name. Sampling is the only workload where Open3D's
+    # legacy and tensor APIs are distinct backends rather than one.
+    for leg in "operations open3d operations-random-open3d" \
+               "operations small-gicp operations-random-small-gicp" \
+               "sampling open3d-tensor sampling-open3d-tensor" \
+               "sampling open3d-legacy sampling-open3d-legacy"; do
+        read -r script backend name <<<"$leg"
+        echo
+        echo "=== $script --backend $backend ==="
+        just benchmark-baseline "$script" --backend "$backend" \
+            --json "runs/$stamp-$name.json" "${extra[@]}" || failed+=("$script/$backend")
+    done
+    echo
+    echo "Reports: runs/$stamp-*.json"
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo "Did not measure: ${failed[*]}" >&2
+        exit 1
+    fi
+
 # Check torchpcl against Open3D and brute force. No timing; needs the Open3D env.
 benchmark-accuracy *args:
     just benchmark-baseline accuracy "$@"
@@ -36,6 +81,15 @@ benchmark-baseline script *args:
 # Diff two saved --json reports; needs neither Open3D nor the benchmark env.
 benchmark-compare before after *args:
     uv run python benchmarks/compare.py "$@"
+
+# Promote a saved report into the kept history (runs/ is scratch; this is not).
+benchmark-keep *args:
+    uv run python benchmarks/history.py add "$@"
+
+# Serve the kept history as a dashboard, re-rendered on every reload. Reachable
+# from another computer; pass --out to write runs/dashboard.html instead.
+benchmark-dashboard *args:
+    uv run python benchmarks/dashboard.py "$@"
 
 # Evaluate FGR recall on Redwood ground-truth pairs. Ground truth comes from
 # the dataset, so this needs no Open3D.
