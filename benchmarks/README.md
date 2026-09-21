@@ -10,7 +10,22 @@ uv sync --group benchmark
 just benchmark-operations --json runs/operations.json
 just benchmark-sampling --json runs/sampling.json
 just benchmark  # timestamped random operation and sampling reports
+just benchmark-gpu        # the same sweep pinned to --device cuda
+just benchmark-baselines  # the same sweep across every third-party backend
 ```
+
+`benchmark-gpu` passes `--device cuda` rather than leaving the default `all`, so
+a build without CUDA stops with an error instead of handing back a CPU-only
+report that looks like a GPU one.
+
+`benchmark-baselines` measures Open3D and small-gicp on operations, and Open3D's
+tensor and legacy APIs on sampling, in the Python 3.12 baseline environment.
+Each backend picks the devices it supports, so it covers the GPU wherever Open3D
+has one, and a backend that fails does not abort the others -- the sweep
+finishes and names what it could not measure. Its singular sibling
+`just benchmark-baseline <script> --backend <backend>` runs one script against
+one backend, which is what registration and Redwood need: they read a dataset,
+so which pairs and scenes to use is part of the invocation.
 
 The `benchmark` dependency group contains memory tooling, without Open3D or
 small-gicp, which live in `baseline`. Each operation/sampling invocation selects
@@ -480,6 +495,59 @@ dependencies or either backend:
 ```bash
 python3 benchmarks/compare.py runs/before.json runs/after.json
 ```
+
+### Keeping a history and a dashboard
+
+`compare.py` answers "did this change help", between two reports. Two other
+scripts answer "how has this moved", across many:
+
+```bash
+just benchmark                       # writes runs/<timestamp>-*.json
+just benchmark-keep runs/20260917T101500Z-operations-random.json
+just benchmark-dashboard             # writes runs/dashboard.html
+```
+
+`history.py add` flattens a report into one row per result and appends it to
+`benchmarks/history/<machine>.jsonl`, which git tracks -- unlike `runs/`,
+which is ignored and disposable. Promotion is manual on purpose: a number is
+worth keeping only when the machine was quiet and the configuration was the
+standard one, and no runner can judge that. `history.py list` shows what is
+stored; `history.py drop REVISION` removes a point you regret.
+
+Three things are refused rather than stored:
+
+- **A `-dirty` revision**, unless you pass `--allow-dirty`. A point measured on
+  an uncommitted tree cannot be attributed to the commit it names. Kept points
+  from a dirty tree are marked `*` on the dashboard.
+- **A report with no recorded machine.** Timings compare only within one
+  computer, so every row carries `environment.machine`; pass `--machine NAME`
+  for reports written before that field existed.
+- **An accuracy report.** `accuracy.py` shares the operation configuration but
+  measures agreement, not speed, and has no place on a performance history.
+
+Re-adding the same run is a no-op; `--replace` overwrites the stored points for
+that revision instead.
+
+Rows may share a series only when their **configuration digest** matches -- a
+hash of the workload-defining config, with the fields that merely select what
+ran (`backend`, `devices`, `ops`, `methods`, `scenes`, `repeats`) removed.
+Changing the voxel size or the thread count therefore starts a *new* card
+instead of bending an existing line, which is the difference between a chart
+that records a regression and one that invents it. `repeats` is excluded
+because sampling a workload more times is the same workload; `warmup` is not,
+because a run without warmup measures a cold kernel.
+
+`dashboard.py` renders the whole history into one self-contained
+`runs/dashboard.html` -- no server, no network, no dependencies, so it can be
+copied or attached and still work. One card per case, torchpcl plus whichever
+baselines were run for it, each line carrying its measured min/max as a band.
+The banner at the top lists only movement whose ranges are disjoint and exceeds
+2%, the same heuristic `compare.py` marks with `*`. Redwood contributes its own
+per-backend summary (mean per-pair time and recall) rather than hundreds of
+per-pair rows.
+
+The history is local. Nothing publishes it, and `dashboard.py` writes into
+ignored `runs/`; regenerate it whenever you want rather than keeping the HTML.
 
 ### When to refresh a baseline
 

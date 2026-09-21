@@ -111,6 +111,10 @@ def environment_metadata(devices: list[str], *, open3d_version: str | None = Non
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "revision": source_revision(),
         "command": sys.argv,
+        # Which computer measured this. Timings are only comparable within one
+        # machine, so a saved history keys its series on this; `compare.py`
+        # has always printed the field.
+        "machine": platform.node(),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "torch": torch.__version__,
