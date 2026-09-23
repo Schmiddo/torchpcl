@@ -397,7 +397,7 @@ def main(argv=None):
         print(f"  {entry.op}/{entry.device} {entry.metric}: {entry.reason}")
 
     report = {
-        "environment": environment_metadata(devices, open3d_version=o3d.__version__),
+        "environment": environment_metadata(devices),
         "config": {**prepared.config(), "threads": args.threads,
                    "devices": devices},
         "input": prepared.input_metadata(),

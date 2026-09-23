@@ -1,6 +1,6 @@
 """Shared workload definition for the operation-style drivers.
 
-`operations.py` measures these workloads and `accuracy.py` checks them for
+The operations suite measures these workloads and `accuracy.py` checks them for
 agreement, so both need the same arguments, the same input preparation and the
 same recorded configuration. Keeping that in one place means a parameter cannot
 drift between what is timed and what is checked.

@@ -40,6 +40,7 @@ def measure(case, *, repeats=5, warmup=1, evaluate=True):
     times = [sample["time_ms"] for sample in samples]
     return {
         "name": case.name, "backend": case.backend, "device": case.device,
+        **({"group": case.group} if getattr(case, "group", None) else {}),
         **case.metadata,
         "memory": memory,
         "time_ms_min": min(times),

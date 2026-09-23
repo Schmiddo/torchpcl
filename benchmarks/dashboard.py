@@ -7,11 +7,12 @@ only a reload -- and so the page can be read from another computer. With
 so that copy needs no server, no network and no dependencies and can be
 attached to a message and still work.
 
-One card per measured case, at most three lines on it: torchpcl and whichever
-baselines were run for the same case. Each line carries its measured min/max as
-a band, because a median alone cannot distinguish a regression from a busy
-machine. Cards are keyed on the configuration digest, so a parameter change
-starts a new card rather than bending an existing line.
+One card per measured case of a profile version: torchpcl's series across
+revisions, with its measured min/max as a band, because a median alone cannot
+distinguish a regression from a busy machine. Baselines are reference values
+rather than series -- they do not change with torchpcl's commits -- so each
+appears as a dashed line at its newest measurement, labelled with its library
+version. Cards of superseded profile versions are hidden unless asked for.
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.history import DEFAULT_HISTORY, read_configs, read_history
+from benchmarks.compare import moved
+from benchmarks.history import BASELINES, DEFAULT_HISTORY, SERIES, machines, read_rows
 
 DEFAULT_OUTPUT = Path("runs/dashboard.html")
 #: Unlikely to collide with a development server already on the box -- 8000
@@ -65,67 +67,59 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def load_rows(directory: Path, machine: str | None) -> list[dict]:
-    if not directory.is_dir():
-        raise SystemExit(f"{directory}: no history yet; add a report with "
-                         "`python benchmarks/history.py add runs/<report>.json`")
-    rows = [row for path in sorted(directory.glob("*.jsonl"))
-            for row in read_history(path)]
-    if machine:
-        rows = [row for row in rows if row["machine"] == machine]
-    if not rows:
-        raise SystemExit(f"{directory}: no points"
-                         + (f" for machine {machine!r}" if machine else ""))
-    return rows
+def load_rows(directory: Path, machine: str | None) -> tuple[list[dict], list[dict]]:
+    """torchpcl's kept points, and the baselines kept beside them."""
+    series, baselines = [], []
+    for path in machines(directory, machine):
+        series += read_rows(path / SERIES)
+        baselines += read_rows(path / BASELINES)
+    if not series:
+        raise SystemExit(f"{directory}: no torchpcl points"
+                         + (f" for machine {machine!r}" if machine else "")
+                         + "; keep some with `just benchmark --keep`")
+    return series, baselines
 
 
 def chart_key(row: dict) -> tuple:
-    return (row["machine"], row["suite"], row.get("variant"),
-            row["config_digest"], row["name"], row["device"])
+    return (row["machine"], row["profile"], row["profile_version"],
+            row.get("group") or "", row["name"], row["device"])
 
 
-def distinguishing_fields(rows: list[dict], configs: dict) -> dict[tuple, list[str]]:
-    """Per (suite, variant), the config fields that actually differ between digests.
-
-    A digest is opaque, so a card has to say what it stands for. Naming every
-    parameter would bury the one that changed; naming the ones that differ is
-    the same rule `compare.py` applies when it prints config differences.
-    """
-    groups: dict[tuple, set[str]] = {}
-    for row in rows:
-        groups.setdefault((row["suite"], row.get("variant")), set()).add(row["config_digest"])
-    fields = {}
-    for group, digests in groups.items():
-        names = {name for digest in digests for name in configs.get(digest, {})}
-        differing = sorted(
-            name for name in names
-            if len({json.dumps(configs.get(digest, {}).get(name), default=str)
-                    for digest in digests}) > 1)
-        fields[group] = differing
-    return fields
+def references(baselines: list[dict]) -> dict[tuple, list[dict]]:
+    """Per card, each baseline backend's newest measurement."""
+    newest: dict[tuple, dict] = {}
+    for row in baselines:
+        slot = (chart_key(row), row["backend"])
+        if slot not in newest or (row["timestamp"] or "") > (newest[slot]["timestamp"] or ""):
+            newest[slot] = row
+    cards: dict[tuple, list[dict]] = {}
+    for (key, backend), row in sorted(newest.items()):
+        cards.setdefault(key, []).append({
+            "backend": backend, "version": row.get("baseline_version"),
+            "slot": SERIES_COLORS.get(backend, FALLBACK_SLOT),
+            "median": row["median_ms"], "min": row.get("min_ms"),
+            "max": row.get("max_ms"), "timestamp": row["timestamp"],
+            "metrics": row.get("metrics") or {},
+        })
+    return cards
 
 
-def config_label(row: dict, configs: dict, fields: dict[tuple, list[str]]) -> str:
-    """A short, honest description of the card's configuration."""
-    config = configs.get(row["config_digest"], {})
-    differing = fields.get((row["suite"], row.get("variant")), [])
-    shown = differing or [name for name in ("threads", "dtype", "voxel_size")
-                          if name in config]
-    parts = [f"{name}={config[name]}" for name in shown if name in config]
-    return "  ".join(parts) or f"config {row['config_digest']}"
-
-
-def build_charts(rows: list[dict], configs: dict) -> list[dict]:
+def build_charts(rows: list[dict], baselines: list[dict] | None = None) -> list[dict]:
     """Group points into cards, each internally comparable by construction."""
-    fields = distinguishing_fields(rows, configs)
+    latest: dict[tuple, int] = {}
+    for row in rows:
+        profile = (row["machine"], row["profile"])
+        latest[profile] = max(latest.get(profile, 0), row["profile_version"])
+    reference = references(baselines or [])
     charts: dict[tuple, dict] = {}
     for row in rows:
         key = chart_key(row)
         chart = charts.setdefault(key, {
             "machine": row["machine"], "suite": row["suite"],
-            "variant": row.get("variant"), "digest": row["config_digest"],
-            "name": row["name"], "device": row["device"],
-            "config": config_label(row, configs, fields),
+            "profile": row["profile"], "version": row["profile_version"],
+            "current": row["profile_version"] == latest[row["machine"], row["profile"]],
+            "group": row.get("group"), "name": row["name"], "device": row["device"],
+            "references": reference.get(key, []),
             "series": {},
         })
         chart["series"].setdefault(row["backend"], []).append(row)
@@ -165,9 +159,8 @@ def build_charts(rows: list[dict], configs: dict) -> list[dict]:
 def latest_movement(charts: list[dict]) -> list[dict]:
     """torchpcl's change on each card between its last two stored revisions.
 
-    Only movement whose measured ranges do not overlap is called a change --
-    the same rule `compare.py` uses, for the same reason: anything inside the
-    spread is indistinguishable from clock drift.
+    Only movement `compare.moved` accepts is called a change, so the page and
+    `compare.py` can never disagree about what moved.
     """
     moves = []
     for chart in charts:
@@ -178,33 +171,38 @@ def latest_movement(charts: list[dict]) -> list[dict]:
         before, after = series["points"][-2], series["points"][-1]
         if not before["median"]:
             continue
-        ratio = after["median"] / before["median"] - 1
-        separated = (before["max"] is not None and after["min"] is not None
-                     and (before["max"] < after["min"] or after["max"] < before["min"]))
+        def result(point):
+            return {"median": {"time_ms": point["median"]},
+                    "time_ms_min": point["min"], "time_ms_max": point["max"]}
+
         moves.append({
-            "label": f"{chart['name']} · {chart['device']}",
-            "suite": chart["suite"], "machine": chart["machine"],
-            "device": chart["device"],
+            "label": f"{chart_title(chart)} · {chart['device']}",
+            "profile": chart["profile"], "current": chart["current"],
+            "machine": chart["machine"], "device": chart["device"],
             "before": before["median"], "after": after["median"],
             "from_revision": before["revision"], "to_revision": after["revision"],
-            "ratio": ratio, "separated": separated,
+            "ratio": after["median"] / before["median"] - 1,
+            "significant": moved(result(before), result(after)),
         })
     return sorted(moves, key=lambda move: move["ratio"])
 
 
-def page_data(rows: list[dict], configs: dict) -> dict:
-    charts = build_charts(rows, configs)
-    machines = sorted({row["machine"] for row in rows})
+def chart_title(chart: dict) -> str:
+    return "/".join(filter(None, (chart.get("group"), chart["name"])))
+
+
+def page_data(rows: list[dict], baselines: list[dict] | None = None) -> dict:
+    charts = build_charts(rows, baselines)
     return {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "machines": machines,
-        "suites": sorted({chart["suite"] for chart in charts}),
+        "machines": sorted({row["machine"] for row in rows}),
+        "profiles": sorted({chart["profile"] for chart in charts}),
         "devices": sorted({chart["device"] for chart in charts}),
         "charts": charts,
         "movement": latest_movement(charts),
         "environments": sorted(
             {(row["machine"], row.get("platform") or "", row.get("gpu") or "",
-              row.get("torch") or "", row.get("python") or "")
+              row["versions"].get("torch") or "", row["versions"].get("python") or "")
              for row in rows}),
     }
 
@@ -215,9 +213,10 @@ def render(data: dict) -> str:
 
 def build(args) -> tuple[str, str]:
     """The rendered page, and one line describing what went into it."""
-    rows = load_rows(args.history, args.machine)
-    data = page_data(rows, read_configs(args.history))
-    return render(data), f"{len(data['charts'])} charts from {len(rows)} points"
+    rows, baselines = load_rows(args.history, args.machine)
+    data = page_data(rows, baselines)
+    return render(data), (f"{len(data['charts'])} charts from {len(rows)} points "
+                          f"and {len(baselines)} baselines")
 
 
 def handler_class(args):
@@ -384,6 +383,8 @@ TEMPLATE = r"""<!DOCTYPE html>
     border: 1px solid var(--border); border-radius: 6px;
   }
   .filters button { cursor: pointer; align-self: flex-end; }
+  .filters .check { flex-direction: row; align-items: center; gap: 6px;
+                    align-self: flex-end; padding-bottom: 7px; }
 
   .movement {
     background: var(--surface-1); border: 1px solid var(--border);
@@ -416,6 +417,8 @@ TEMPLATE = r"""<!DOCTYPE html>
             font-size: 12px; color: var(--text-secondary); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
+  .legend i.dashed, .tooltip i.dashed { height: 0; background: none !important;
+                                        border-top: 2px dashed currentColor; }
 
   details { margin-top: 10px; }
   summary { cursor: pointer; font-size: 12px; color: var(--text-muted); }
@@ -448,8 +451,9 @@ TEMPLATE = r"""<!DOCTYPE html>
 
   <div class="filters">
     <label>Machine <select id="machine"></select></label>
-    <label>Suite <select id="suite"></select></label>
+    <label>Profile <select id="profile"></select></label>
     <label>Device <select id="device"></select></label>
+    <label class="check"><input type="checkbox" id="retired"> superseded profile versions</label>
     <button id="theme" type="button">Toggle theme</button>
   </div>
 
@@ -469,7 +473,6 @@ TEMPLATE = r"""<!DOCTYPE html>
 const DATA = __DATA__;
 const NS = "http://www.w3.org/2000/svg";
 const PLOT = { width: 340, height: 170, left: 46, right: 16, top: 12, bottom: 34 };
-const NOISE = 0.02;
 
 const el = (tag, props = {}, kids = []) => {
   const node = document.createElement(tag);
@@ -489,7 +492,7 @@ const svgEl = (tag, props = {}) => {
 const color = (slot) => `var(--series-${slot})`;
 const fmtMs = (value) =>
   value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
-const shortRev = (revision) => (revision || "").replace("-dirty", "*");
+const shortRev = (revision) => revision || "";
 
 // Clean axis steps: 1, 2 or 5 times a power of ten.
 function ticks(low, high, count = 4) {
@@ -505,7 +508,7 @@ function ticks(low, high, count = 4) {
 function chartBounds(chart) {
   let low = Infinity;
   let high = -Infinity;
-  for (const series of chart.series) {
+  for (const series of [...chart.series, { points: chart.references }]) {
     for (const point of series.points) {
       for (const value of [point.median, point.min, point.max]) {
         if (typeof value === "number") {
@@ -532,7 +535,7 @@ function drawChart(chart) {
 
   const svg = svgEl("svg", {
     viewBox: `0 0 ${width} ${height}`,
-    role: "img", "aria-label": `${chart.name} on ${chart.device}, milliseconds by revision`,
+    role: "img", "aria-label": `${title(chart)} on ${chart.device}, milliseconds by revision`,
   });
 
   for (const value of ticks(low, high)) {
@@ -580,6 +583,23 @@ function drawChart(chart) {
     svg.appendChild(label);
   });
 
+  // Baselines: one measurement per library version, not a series, so a
+  // dashed level across the whole plot with its measured range behind it.
+  for (const ref of chart.references) {
+    const stroke = color(ref.slot);
+    if (typeof ref.min === "number" && typeof ref.max === "number") {
+      svg.appendChild(svgEl("rect", {
+        x: left, width: plotWidth, y: y(ref.max),
+        height: Math.max(0.5, y(ref.min) - y(ref.max)),
+        fill: stroke, "fill-opacity": 0.08,
+      }));
+    }
+    svg.appendChild(svgEl("line", {
+      x1: left, x2: width - right, y1: y(ref.median), y2: y(ref.median),
+      stroke, "stroke-width": 1.5, "stroke-dasharray": "5 4",
+    }));
+  }
+
   for (const series of chart.series) {
     const stroke = color(series.slot);
     const band = series.points.filter((p) => typeof p.min === "number" && typeof p.max === "number");
@@ -612,8 +632,7 @@ function drawChart(chart) {
   // placed is dropped rather than nudged off its line -- the legend, tooltip
   // and table still carry it.
   const placed = [];
-  const labelled = chart.series.slice().sort(
-    (a, b) => (a.backend === "torchpcl" ? -1 : 0) - (b.backend === "torchpcl" ? -1 : 0));
+  const labelled = [...chart.series, ...chart.references.map((ref) => ({ points: [ref] }))];
   for (const series of labelled) {
     const last = series.points[series.points.length - 1];
     if (!last) continue;
@@ -697,6 +716,13 @@ function renderTooltip(chart, index, clientX, clientY) {
       ]));
     }
   }
+  for (const ref of chart.references) {
+    const key = el("i", { class: "dashed" });
+    key.style.color = color(ref.slot);
+    tooltip.appendChild(el("div", { class: "row" }, [
+      key, el("b", { text: `${fmtMs(ref.median)} ms` }), el("span", { text: refLabel(ref) }),
+    ]));
+  }
   tooltip.style.opacity = 1;
   const box = tooltip.getBoundingClientRect();
   const x = Math.min(clientX + 14, window.innerWidth - box.width - 8);
@@ -716,26 +742,39 @@ function drawTable(chart) {
     });
     return row;
   });
+  chart.references.forEach((ref) => {
+    const row = el("tr", {}, [el("td", { text: refLabel(ref) })]);
+    chart.series.forEach((_, index) => row.appendChild(
+      el("td", { text: index === 0 ? fmtMs(ref.median) : "" })));
+    body.push(row);
+  });
   return el("details", {}, [
     el("summary", { text: "Data table" }),
     el("table", {}, [el("thead", {}, [head]), el("tbody", {}, body)]),
   ]);
 }
 
+const title = (chart) => [chart.group, chart.name].filter(Boolean).join("/");
+const refLabel = (ref) => `${ref.backend} ${ref.version || ""}`.trim();
+
 function drawCard(chart) {
-  const title = `${chart.name} · ${chart.device}`;
-  const suite = chart.variant ? `${chart.suite} (${chart.variant})` : chart.suite;
+  const version = chart.current ? "" : ` · superseded v${chart.version}`;
   const card = el("div", { class: "card" }, [
-    el("h3", { text: title }),
-    el("p", { class: "meta", text: `${suite} · ${chart.config}` }),
+    el("h3", { text: `${title(chart)} · ${chart.device}` }),
+    el("p", { class: "meta", text: `${chart.profile}${version}` }),
   ]);
   card.appendChild(drawChart(chart));
-  if (chart.series.length > 1) {
+  if (chart.series.length + chart.references.length > 1) {
     const legend = el("div", { class: "legend" });
     chart.series.forEach((series) => {
       const key = el("i");
       key.style.background = color(series.slot);
       legend.appendChild(el("span", {}, [key, el("span", { text: series.backend })]));
+    });
+    chart.references.forEach((ref) => {
+      const key = el("i", { class: "dashed" });
+      key.style.color = color(ref.slot);
+      legend.appendChild(el("span", {}, [key, el("span", { text: refLabel(ref) })]));
     });
     card.appendChild(legend);
   }
@@ -748,7 +787,7 @@ function drawMovement(moves) {
   const list = document.getElementById("movement-list");
   const title = document.getElementById("movement-title");
   list.textContent = "";
-  const real = moves.filter((m) => Math.abs(m.ratio) > NOISE && m.separated);
+  const real = moves.filter((m) => m.significant);
   if (!moves.length) { section.hidden = true; return; }
   section.hidden = false;
   title.textContent = real.length
@@ -767,7 +806,7 @@ function drawMovement(moves) {
       el("span", { class: "case", text: move.label }),
       el("span", {
         class: "detail",
-        text: `${fmtMs(move.before)} → ${fmtMs(move.after)} ms · ${move.suite} · `
+        text: `${fmtMs(move.before)} → ${fmtMs(move.after)} ms · ${move.profile} · `
               + `${shortRev(move.from_revision)} → ${shortRev(move.to_revision)}`,
       }),
     ]));
@@ -782,12 +821,14 @@ function fill(select, values, allLabel) {
 
 function apply() {
   const machine = document.getElementById("machine").value;
-  const suite = document.getElementById("suite").value;
+  const profile = document.getElementById("profile").value;
   const device = document.getElementById("device").value;
+  const retired = document.getElementById("retired").checked;
   const matches = (item) =>
     (!machine || item.machine === machine)
-    && (!suite || item.suite === suite)
-    && (!device || item.device === device);
+    && (!profile || item.profile === profile)
+    && (!device || item.device === device)
+    && (retired || item.current);
 
   const grid = document.getElementById("grid");
   grid.textContent = "";
@@ -804,9 +845,9 @@ function init() {
     `${points} points · ${DATA.charts.length} cases · generated ${DATA.generated.replace("T", " ")}`;
 
   fill(document.getElementById("machine"), DATA.machines, "All machines");
-  fill(document.getElementById("suite"), DATA.suites, "All suites");
+  fill(document.getElementById("profile"), DATA.profiles, "All profiles");
   fill(document.getElementById("device"), DATA.devices, "All devices");
-  ["machine", "suite", "device"].forEach((id) =>
+  ["machine", "profile", "device", "retired"].forEach((id) =>
     document.getElementById(id).addEventListener("change", apply));
 
   document.getElementById("theme").addEventListener("click", () => {
@@ -815,12 +856,6 @@ function init() {
   });
 
   const footer = document.getElementById("environments");
-  if (DATA.charts.some((chart) => chart.revisions.some((r) => (r || "").endsWith("-dirty")))) {
-    footer.appendChild(el("div", {
-      text: "* marks a revision measured with uncommitted changes: the point "
-            + "cannot be attributed to that commit alone.",
-    }));
-  }
   DATA.environments.forEach(([machine, platform, gpu, torch, python]) => {
     footer.appendChild(el("div", {
       text: [machine, platform, gpu || "no GPU recorded", `torch ${torch}`,

@@ -1,31 +1,39 @@
 # Benchmarks
 
-Track torchpcl performance with operation and sampling runs in the project
-environment. Open3D is optional: measure it separately when refreshing a saved
-baseline, then compare JSON reports offline. Run commands from the repository
-root.
+Track torchpcl performance per revision, against Open3D and small-gicp as
+reference baselines. Run commands from the repository root.
 
 ```bash
 uv sync --group benchmark
-just benchmark-operations --json runs/operations.json
-just benchmark-sampling --json runs/sampling.json
-just benchmark  # timestamped random operation and sampling reports
-just benchmark-gpu        # the same sweep pinned to --device cuda
-just benchmark-baselines  # the same sweep across every third-party backend
+just benchmark                  # every routine profile on this revision
+just benchmark --keep           # ... and keep it in the history (committed tree only)
+just benchmark-baselines --keep # Open3D/small-gicp reference values, per library version
+just benchmark-dashboard        # plot the history on :8770
+just benchmark-run operations --op knn --k 16   # ad hoc: any suite, any parameters
 ```
 
-`benchmark-gpu` passes `--device cuda` rather than leaving the default `all`, so
-a build without CUDA stops with an error instead of handing back a CPU-only
-report that looks like a GPU one.
+There are four suites -- `operations`, `sampling`, `registration` and
+`redwood` -- and one runner, `benchmarks/run.py`, that measures any of them.
+A **profile** (`benchmarks/profiles.py`) pins every parameter that defines a
+suite's work: sizes, radii, dtype, seed, `threads=8`, warmup. Only profile
+runs of a committed tree are kept, because only they measure the same work on
+every revision; an ad hoc run with other parameters is for exploring and
+comparing with `just benchmark-compare`.
 
-`benchmark-baselines` measures Open3D and small-gicp on operations, and Open3D's
-tensor and legacy APIs on sampling, in the Python 3.12 baseline environment.
-Each backend picks the devices it supports, so it covers the GPU wherever Open3D
-has one, and a backend that fails does not abort the others -- the sweep
-finishes and names what it could not measure. Its singular sibling
-`just benchmark-baseline <script> --backend <backend>` runs one script against
-one backend, which is what registration and Redwood need: they read a dataset,
-so which pairs and scenes to use is part of the invocation.
+`just benchmark` runs the routine profiles in fresh processes and writes one
+report per profile into `runs/<timestamp>/`. Profiles whose data is missing
+are skipped with a note (`just download-data`), and full Redwood (739 pairs) is
+not routine: run it with `just benchmark --profile redwood --keep`. Options
+that only select what runs -- `--device cuda`, `--repeats 9`, an operation
+subset -- reach every run; anything a profile pins is rejected.
+
+Baselines do not change with torchpcl's commits, so `just benchmark-baselines`
+is needed once per library version (or machine, or profile change), not per
+revision. It runs in the Python 3.12 baseline environment, measures every
+third-party backend of every routine profile, and each backend picks the
+devices it supports. A backend that fails does not abort the others. Its ad
+hoc sibling `just benchmark-baseline <suite> --backend <backend>` runs one
+suite against one backend.
 
 The `benchmark` dependency group contains memory tooling, without Open3D or
 small-gicp, which live in `baseline`. Each operation/sampling invocation selects
@@ -40,9 +48,8 @@ unavailable device fails. Performance runs report time and memory, and compute
 no reference output of any kind. The test suite needs neither Open3D nor a
 baseline environment; registration evaluation still has its own scoring.
 
-Every benchmark shares the `Case`/`measure` contract described below.
-Registration and Redwood are separate workflows but run in the same
-environment as everything else. Accuracy is checked by its own command, never by
+Every suite shares the `Case`/`measure` contract described below and runs
+in the same environment. Accuracy is checked by its own command, never by
 a benchmark and never by the test suite; see "Accuracy checking" below.
 
 ## Registration benchmarks
@@ -50,7 +57,7 @@ a benchmark and never by the test suite; see "Accuracy checking" below.
 Measure ICP and FGR on pairs with a known rigid transform:
 
 ```bash
-just benchmark-registration --json runs/registration.json
+just benchmark-run registration --json runs/registration.json
 ```
 
 Preprocessing -- voxel downsampling, normals and FPFH -- is torchpcl's and runs
@@ -74,7 +81,7 @@ Python 3.12 baseline environment:
 ```bash
 just benchmark-baseline registration --backend open3d      # the baseline to beat
 just benchmark-baseline registration --backend small-gicp  # a strong CPU baseline
-just benchmark-registration --open3d-metrics               # adds fitness/inlier RMSE
+just benchmark-baseline registration --open3d-metrics     # adds fitness/inlier RMSE
 ```
 
 All three converge to the same pose: within a hundredth of a degree for
@@ -94,7 +101,7 @@ small-gicp is CPU only and has no global registration, so it runs ICP alone;
 design, so `--threads` is part of its workload rather than an environment
 detail and is passed to every one of its calls.
 
-The second still needs that environment, so run it through
+`--open3d-metrics` needs Open3D, so run it through
 `just benchmark-baseline registration --open3d-metrics`. Set up the environment
 once with:
 
@@ -120,11 +127,12 @@ Clouds may have different point counts and partial overlap.
 
 ```bash
 # Additional pairs use the same three filenames.
-.venv-benchmark/bin/python benchmarks/registration.py --data data/ another-pair/
-.venv-benchmark/bin/python benchmarks/registration.py --method icp --repeats 10
-.venv-benchmark/bin/python benchmarks/registration.py --device cpu
-.venv-benchmark/bin/python benchmarks/registration.py --device cuda
+just benchmark-run registration --data data/ another-pair/
+just benchmark-run registration --method icp --repeats 10
+just benchmark-run registration --device cuda --objective point-to-plane
 ```
+
+The `registration` profile is point-to-point ICP and FGR on the `data/` pair.
 
 The suite runs two independent cases:
 
@@ -215,9 +223,9 @@ truth:
 
 ```bash
 just download-data
-just benchmark-redwood --json runs/redwood.json
+just benchmark --profile redwood --keep   # all four scenes, kept
 # Short CPU smoke test:
-just benchmark-redwood --scenes livingroom1 --device cpu --max-pairs 2 --threads 2
+just benchmark-run redwood --scenes livingroom1 --device cpu --max-pairs 2 --threads 2
 ```
 
 Ground truth comes from the dataset, not from another library, so recall needs
@@ -247,9 +255,10 @@ plus the runner's separate memory-sampling call. Set `--repeats`, `--warmup`,
 `--dtype`, `--voxel-size`, `--fgr-distance`, `--fgr-iterations`, or `--seed` as needed.
 An eight-fragment cache bounds retained preprocessing data.
 
-Console output includes pair timings and success counts. JSON includes per-run
-transforms, Redwood errors, pose/fitness metrics, memory, per-scene recall, and
-aggregate recall weighted by pair count. Recall is computed separately for each
+Console output includes pair timings and Redwood errors. JSON includes per-run
+transforms, Redwood errors, pose/fitness metrics, memory, per-scene recall
+under `input.scenes`, and aggregate recall weighted by pair count under
+`summary`; the history keeps only that summary. Recall is computed separately for each
 repeat before averaging. `--max-pairs` selects the first N eligible pairs per
 scene and explicitly marks the report as a subset; use it for smoke tests only.
 
@@ -259,15 +268,13 @@ Measures `torchpcl.farthest_point_sample` or an explicitly selected Open3D
 `farthest_point_down_sample` backend on a random cloud (no dataset needed):
 
 ```bash
-just benchmark-sampling --json runs/sampling.json
-just benchmark-sampling --num-points 1000000 --num-samples 20000
-just benchmark-sampling --device cpu --dtype float64
+just benchmark-run sampling --json runs/sampling.json
+just benchmark-run sampling --num-points 1000000 --num-samples 20000
+just benchmark-run sampling --device cpu --dtype float64
 
 # Optional baselines, after setting up the baseline environment above:
-.venv-benchmark/bin/python benchmarks/sampling.py \
-    --backend open3d-tensor --json runs/sampling-open3d-tensor.json
-.venv-benchmark/bin/python benchmarks/sampling.py \
-    --backend open3d-legacy --device cpu --json runs/sampling-open3d-legacy.json
+just benchmark-baseline sampling --backend open3d-tensor
+just benchmark-baseline sampling --backend open3d-legacy --device cpu
 ```
 
 All backends select the same start index (0) on an identical, dtype-quantized
@@ -297,11 +304,10 @@ Measure neighbor search, preprocessing or FPFH with `--op`, defaulting to all
 operations. Use the same arguments when recording an Open3D baseline:
 
 ```bash
-just benchmark-operations --json runs/operations.json
-just benchmark-operations --op knn --num-reference 1000000 --k 16
-just benchmark-operations --op radius --radius 0.01 --device cuda
-.venv-benchmark/bin/python benchmarks/operations.py \
-    --backend open3d --json runs/operations-open3d.json
+just benchmark-run operations --json runs/operations.json
+just benchmark-run operations --op knn --num-reference 1000000 --k 16
+just benchmark-run operations --op radius --radius 0.01 --device cuda
+just benchmark-baseline operations --backend open3d --json runs/operations-open3d.json
 ```
 
 Four scopes are measured, because the libraries divide the work differently:
@@ -346,7 +352,8 @@ from documentation:
 
 ### Points and FPFH normals
 
-Random inputs are seeded and quantized to the requested dtype. `--input redwood`
+The `operations-random` and `operations-redwood` profiles run every operation
+on each input. Random inputs are seeded and quantized to the requested dtype. `--input redwood`
 reads points and optional normals together with `torchpcl.load_ply` (backed by
 `plyfile`), without Open3D. Use `--fragment PATH` to select a
 cloud after downloading data with `just download-data`.
@@ -366,8 +373,8 @@ normals with Open3D, so its workload differs. To preserve an old workload,
 supply its normals explicitly to both backend runs.
 
 ```bash
-just benchmark-operations --input redwood --op knn
-just benchmark-operations --input redwood --op fpfh --normals data/normals.npy
+just benchmark-run operations --input redwood --op knn
+just benchmark-run operations --input redwood --op fpfh --normals data/normals.npy
 ```
 
 Performance runs do not compute Open3D reference outputs or call scoring hooks.
@@ -432,23 +439,21 @@ continuity.
 
 ## Tracking progress across runs
 
-Each script accepts `--json PATH`. Operation/sampling reports preserve the
-existing format: environment (timestamp, revision, command, available versions,
-machine/platform/GPU), configuration, and rows with median, min/max, memory and
-per-repeat timings. Their performance samples contain no accuracy scores.
-Registration/Redwood reports continue to include their quality measurements.
+Every run accepts `--json PATH`, and `just benchmark` writes one per profile.
+A report holds the environment (timestamp, revision, command, versions,
+machine/platform/GPU), `suite`, `profile` (name, version and pinned values, or
+`null` for an ad hoc run), `config`, `input` (what was prepared), `skipped`,
+and one `results` row per case with median, min/max, memory and per-repeat
+samples. Registration and Redwood rows also carry their quality metrics and a
+`group` naming the pair they ran on.
 
-`just benchmark` saves the random operation and sampling reports under
-`runs/<UTC timestamp>-<name>.json`. Extra arguments reach both scripts, so use
-shared options such as `--repeats`, `--warmup`, `--threads`, `--device`, or
-`--dtype`; use individual recipes for operation-specific options. Real-data
-operations, registration and Redwood are explicit runs.
+### Comparing two reports
 
 ```bash
-just benchmark-operations --json runs/before.json
+just benchmark-run operations --json runs/before.json
 # Change a kernel and rebuild the project environment's native extension:
 uv sync --group benchmark --reinstall-package torchpcl
-just benchmark-operations --json runs/after.json
+just benchmark-run operations --json runs/after.json
 just benchmark-compare runs/before.json runs/after.json
 
 # Reuse a separately recorded Open3D baseline:
@@ -456,41 +461,31 @@ just benchmark-compare runs/operations-open3d.json runs/after.json \
     --before-backend open3d --after-backend torchpcl
 ```
 
-A baseline is just a retained JSON report. There is no automatic lookup or
-refresh, and no competitor installation is needed to compare it. Refresh in
-the Open3D environment only when needed; the torchpcl development loop need not
-rebuild that environment. Keep reports in ignored `runs/` or copy them elsewhere.
-
-Without selectors, `compare.py` matches name/backend/device and shows the
-percentage change in median runtime. `--backend NAME` restricts both reports.
-With paired `--before-backend` / `--after-backend` selectors, it matches the
-selected rows by operation/device and prints baseline/candidate speedup and
-both measured ranges. A speedup above 1 means the candidate was faster. Rows
-present only in one report remain visible. Existing registration reports remain
-readable in history mode.
+Without selectors, `compare.py` matches group/name/backend/device and shows
+the percentage change in median runtime. `--backend NAME` restricts both
+reports. With paired `--before-backend` / `--after-backend` selectors, it
+matches the selected rows by group/operation/device and prints
+baseline/candidate speedup and both measured ranges. A speedup above 1 means
+the candidate was faster. Rows present only in one report remain visible.
 
 The comparison prints available environment provenance and `! config`
 differences; it does not validate compatibility. Choose matching inputs,
-parameters, threads and hardware yourself. An expected backend change differs
-from a changed workload; missing provenance in old reports remains unknown.
-Point/normal files must also have unchanged content, not just matching paths.
-The printed notes call out unequal work such as bare voxelization, CUDA
-index-build splits, capped radius queries and legacy precision. Such ratios
-are contextual timings, not equivalent-work speedups.
+parameters, threads and hardware yourself -- or compare two runs of one
+profile, which fixes all of them. Point/normal files must also have unchanged
+content, not just matching paths. The printed notes call out unequal work
+such as bare voxelization, CUDA index-build splits, capped radius queries and
+legacy precision. Such ratios are contextual timings, not equivalent-work
+speedups.
 
-History rows get `*` when the change exceeds 2% and both measured ranges are
-disjoint. This is a heuristic, not statistical significance; an unmarked row
-does not prove absence of regression. Old reports' changed accuracy metrics
-remain visible in history mode. A `-dirty` revision cannot be reproduced from
-its commit hash alone.
+A row gets `*` when the change exceeds 2% and both measured ranges are
+disjoint (`compare.moved`, the same rule the dashboard uses). This is a
+heuristic, not statistical significance; an unmarked row does not prove
+absence of regression. Changed accuracy metrics are listed as `gate:` lines.
 
-Each row must be uniquely identified by name, backend and device; a report
-containing the same row twice is rejected rather than silently compared against
-whichever copy landed last. No driver emits one today. A parameter sweep would,
-and would need the swept parameter in the key.
-
-`compare.py` uses only the standard library. It can run without project
-dependencies or either backend:
+Each row must be uniquely identified by group, name, backend and device; a
+report containing the same row twice is rejected rather than silently compared
+against whichever copy landed last. `compare.py` uses only the standard
+library, so it runs without project dependencies or either backend:
 
 ```bash
 python3 benchmarks/compare.py runs/before.json runs/after.json
@@ -498,57 +493,48 @@ python3 benchmarks/compare.py runs/before.json runs/after.json
 
 ### Keeping a history and a dashboard
 
-`compare.py` answers "did this change help", between two reports. Two other
-scripts answer "how has this moved", across many:
+`just benchmark --keep` (or `just benchmark-history add REPORT...`) promotes
+profile reports into `benchmarks/history/<machine>/`, which outlives `runs/`:
 
-```bash
-just benchmark                       # writes runs/<timestamp>-*.json
-just benchmark-keep runs/20260917T101500Z-operations-random.json
-just benchmark-dashboard             # serves the history on :8770
-```
+- `torchpcl.jsonl` holds one row per case per kept revision: the series.
+- `baselines.jsonl` holds one row per case per baseline library version.
+  Re-measuring the same version replaces its row; a new version adds one.
+- `profiles.json` records the pinned values each profile version was first
+  kept with.
 
-`history.py add` flattens a report into one row per result and appends it to
-`benchmarks/history/<machine>.jsonl`, which outlives the run -- unlike `runs/`,
-which is ignored and disposable. Whether that directory is committed, kept
-locally or synced some other way is an open question; the format is a plain
-JSONL row per point either way. The machine is a label for the computer that
-measured the points, derived from its operating system and processor
-(`linux-amd-ryzen-9-7950x`), because timings compare only within one computer.
-Two boxes with the same processor would collide; set
-`$TORCHPCL_BENCHMARK_MACHINE` on one of them, or fix a stored label afterwards
-with `history.py relabel OLD NEW`.
-Promotion is manual on purpose: a number is
-worth keeping only when the machine was quiet and the configuration was the
-standard one, and no runner can judge that. `history.py list` shows what is
-stored; `history.py drop REVISION` removes a point you regret.
+Whether that directory is committed, kept locally or synced some other way is
+an open question; the format is plain JSONL either way. The machine is a label
+for the computer that measured the points, derived from its operating system
+and processor (`linux-amd-ryzen-9-7950x`), because timings compare only within
+one computer. Two boxes with the same processor would collide; set
+`$TORCHPCL_BENCHMARK_MACHINE` on one of them, or rename a stored label with
+`just benchmark-history relabel OLD NEW`. `just benchmark-history list` shows
+what is stored; `just benchmark-history drop REVISION` removes a point you
+regret.
 
-Two things are refused rather than stored:
+Refused rather than stored:
 
-- **A `-dirty` revision**, unless you pass `--allow-dirty`. A point measured on
-  an uncommitted tree cannot be attributed to the commit it names. Kept points
-  from a dirty tree are marked `*` on the dashboard.
-- **An accuracy report.** `accuracy.py` shares the operation configuration but
-  measures agreement, not speed, and has no place on a performance history.
+- **A dirty revision.** A point measured on an uncommitted tree cannot be
+  attributed to the commit it names. `just benchmark --keep` checks this
+  before measuring anything.
+- **An ad hoc run.** Without a profile there is no guarantee the next revision
+  measures the same work, so there is no series to join.
+- **A profile edited without a version bump.** Series are keyed on profile
+  name and version. Changing a pinned value is a new workload: bump `version`
+  in `profiles.py`, which starts new cards and hides the old ones as
+  superseded. Pinning a newly added argument at the value it always had is the
+  same work and needs no bump.
+- **An accuracy report**, which measures agreement, not speed.
 
-Re-adding the same run is a no-op; `--replace` overwrites the stored points for
-that revision instead.
+Re-keeping the same revision is a no-op; `--replace` overwrites its points.
 
-Rows may share a series only when their **configuration digest** matches -- a
-hash of the workload-defining config, with the fields that merely select what
-ran (`backend`, `devices`, `ops`, `methods`, `scenes`, `repeats`) removed.
-Changing the voxel size or the thread count therefore starts a *new* card
-instead of bending an existing line, which is the difference between a chart
-that records a regression and one that invents it. `repeats` is excluded
-because sampling a workload more times is the same workload; `warmup` is not,
-because a run without warmup measures a cold kernel.
-
-`dashboard.py` renders the whole history into one page: one card per case,
-torchpcl plus whichever baselines were run for it, each line carrying its
-measured min/max as a band.
-The banner at the top lists only movement whose ranges are disjoint and exceeds
-2%, the same heuristic `compare.py` marks with `*`. Redwood contributes its own
-per-backend summary (mean per-pair time and recall) rather than hundreds of
-per-pair rows.
+`dashboard.py` renders the history into one page: one card per case of a
+profile version, torchpcl's series across revisions with its measured min/max
+as a band, and each baseline as a dashed reference line at its newest
+measurement, labelled with its library version. Superseded profile versions
+are hidden unless the checkbox asks for them. The banner at the top lists only
+movement `compare.moved` accepts. Redwood contributes its per-backend summary
+(mean per-pair time and recall) rather than hundreds of per-pair rows.
 
 By default it serves that page over HTTP and re-renders it on every request,
 so a newly kept point needs a browser reload rather than a restart, and the
@@ -565,9 +551,7 @@ just benchmark-dashboard --out                # write runs/dashboard.html, don't
 
 With `--out` it writes the same page to a file instead. That copy embeds its
 data and loads nothing, so it needs no server and no network and can be
-attached to a message. The history is local either way: nothing publishes it,
-and `--out` writes into ignored `runs/`, so regenerate the HTML whenever you
-want rather than keeping it.
+attached to a message.
 
 ### When to refresh a baseline
 
@@ -580,40 +564,39 @@ invalidates the other.
 
 ## Architecture
 
-Every benchmark is split into three independent layers so that adding an
-operation doesn't touch the others:
+Every benchmark is split into independent layers so that adding an operation
+doesn't touch the others:
 
-- **A `Case`** (`case.py`): a backend/operation-neutral dataclass —
+- **A `Case`** (`case.py`): a backend/operation-neutral dataclass --
   `run`, `synchronize`, `reset`, `evaluate`, an optional
-  `device_memory_reader`, and a `metadata` dict of static descriptive fields
-  (dtype, whether a backend is a reference-only baseline, ...). `case.py`
-  also holds `select_devices`, the shared `--device all/cpu/cuda` resolution
-  used by every benchmark.
+  `device_memory_reader`, a `metadata` dict of static descriptive fields
+  (dtype, implementation, ...) and an optional `group` naming the input it ran
+  on. `case.py` also holds `select_devices`, the shared `--device all/cpu/cuda`
+  resolution.
 - **Per-operation "cases" modules** (`registration_cases.py`,
-  `sampling_cases.py`, `neighbors_cases.py`, and future ones) prepare shared
-  inputs once (loading a pair, generating a random cloud, ...) -- reusable
-  cloud generation itself lives in `inputs.py` -- and build a `Case` per
-  backend/device/variant. This is the only place that knows about a specific
-  operation's inputs and options. Agreement between backends is not their
-  concern: `accuracy.py` owns every comparison, and builds its cases through
-  the same `make_case` the benchmark uses, so a check cannot drift from what
-  is measured.
+  `sampling_cases.py`, `neighbors_cases.py`, ...) prepare shared inputs once
+  -- reusable cloud generation lives in `inputs.py` -- and build a `Case` per
+  backend/device/variant. This is the only place that knows how to call a
+  specific backend. Agreement between backends is not their concern:
+  `accuracy.py` owns every comparison, and builds its cases through the same
+  `make_case` the benchmark uses, so a check cannot drift from what is
+  measured.
+- **Suites** (`suites.py`) declare a suite's workload arguments, prepare its
+  inputs and yield its cases, or skip records naming what a backend cannot
+  run. `workload.py` holds the operation arguments and input preparation that
+  the operations suite and `accuracy.py` share.
 - **`runner.measure`** (`runner.py`) times a `Case` with warmup/repetition and
-  peak-memory sampling (`memory.py`, backend-neutral). It has no knowledge of
-  what a specific operation measures: it medians whatever numeric fields
-  `case.evaluate()` returns (an empty dict if there's nothing to score, as for
-  sampling) and reports `case.metadata` alongside them. Operation/sampling CLIs
-  pass `evaluate=False`; the hook now has one remaining caller, registration,
-  and the default stays `True` for it.
+  peak-memory sampling (`memory.py`). It medians whatever numeric fields
+  `case.evaluate()` returns, and only suites scored against ground truth
+  (registration, Redwood) ask it to evaluate.
+- **`run.py`** is the one command line: backend loading, device selection,
+  profile pinning, the console table and the JSON report, for every suite.
+  `bench.py` runs profiles through it, one process each; `history.py`,
+  `dashboard.py` and `compare.py` only read reports and need no torch.
 
-The CLI scripts (`registration.py`, `sampling.py`, `operations.py`,
-`accuracy.py`) are thin: argument parsing, picking which cases to build, and
-console/JSON output. Shared CLI plumbing (argument types, thread configuration,
-environment metadata, JSON writing, `open3d` import guard) lives in `cli.py`;
-`workload.py` holds the operation arguments and input preparation that
-`operations.py` and `accuracy.py` share, so the checked workload and the timed
-one cannot diverge. `metrics.py` holds registration-specific
-ground-truth validation and pose errors, independent of `runner.py`.
+`cli.py` holds shared plumbing (argument types, thread configuration,
+environment metadata, JSON writing, import guards); `metrics.py` holds
+registration's ground-truth validation and pose errors.
 
 ### Reusing the components
 
@@ -650,13 +633,14 @@ To benchmark another operation:
    shared, backend-independent input once, and a `make_case(prepared,
    backend, device, ...) -> Case` that allocates that backend's inputs/options
    and returns a `Case`. If the operation has a ground-truth score, compute it
-   in `evaluate(result)`; otherwise leave `evaluate` unset (defaults to
-   returning `{}`, as for sampling).
-2. Add a `<name>.py` CLI script mirroring `sampling.py`'s shape (the smaller
-   of the two existing scripts): parse operation-specific arguments with
-   `cli.py`'s shared helpers, resolve devices with `select_devices`, build one
-   `Case` per backend/device via `make_case`, and pass each to
-   `runner.measure(..., evaluate=False)` for performance runs.
-3. Add a section to this README and, if useful, a `tests/test_benchmark_*.py`
-   covering anything not already exercised by `test_benchmark_runner.py`/
-   `test_benchmark_memory.py`.
+   in `evaluate(result)`; otherwise leave `evaluate` unset.
+2. Add a `Suite` subclass to `suites.py`: its workload arguments, `backends`,
+   any `selection` arguments a profile should leave open, and a `cases()`
+   generator yielding one `Case` per backend/device. Register it in `SUITES`.
+   An operation that fits an existing suite's inputs belongs in that suite
+   instead, as the operations suite's neighbor, preprocessing and FPFH cases
+   do.
+3. Add a `Profile` to `profiles.py` pinning every workload argument; parsing
+   the profile fails until it does.
+4. Add a section to this README and, if useful, a `tests/test_benchmark_*.py`
+   covering anything not already exercised by `test_benchmark_runner.py`.

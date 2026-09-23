@@ -148,12 +148,23 @@ def machine_label() -> str:
     return slug("-".join(part for part in parts if part)) or "unknown"
 
 
-def environment_metadata(devices: list[str], *, open3d_version: str | None = None,
-                         small_gicp_version: str | None = None) -> dict:
+def package_version(name: str) -> str | None:
+    """Installed version of a distribution, ``None`` when it is absent."""
+    from importlib.metadata import PackageNotFoundError
+
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
+def environment_metadata(devices: list[str]) -> dict:
     """Interpreter, platform, library versions, and run identity for the report.
 
     ``timestamp``, ``revision`` and ``command`` are what let two saved reports be
-    ordered and attributed; `compare.py` prints them when diffing.
+    ordered and attributed; `compare.py` prints them when diffing. Baseline
+    versions are whatever is installed, so a baseline row can be tied to the
+    library release that produced it.
     """
     import torch
 
@@ -162,14 +173,13 @@ def environment_metadata(devices: list[str], *, open3d_version: str | None = Non
         "revision": source_revision(),
         "command": sys.argv,
         # Which computer measured this. Timings are only comparable within one
-        # machine, so a saved history keys its series on this; `compare.py`
-        # has always printed the field.
+        # machine, so a saved history keys its series on this.
         "machine": machine_label(),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "torch": torch.__version__,
-        "open3d": open3d_version,
-        "small_gicp": small_gicp_version,
+        "open3d": package_version("open3d"),
+        "small_gicp": package_version("small-gicp"),
         "torchpcl": version("torchpcl"),
         "gpu": torch.cuda.get_device_name() if "cuda" in devices else None,
     }
@@ -191,6 +201,7 @@ __all__ = [
     "environment_metadata",
     "format_optional",
     "machine_label",
+    "package_version",
     "positive_float",
     "positive_int",
     "require_open3d",

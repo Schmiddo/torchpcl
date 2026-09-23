@@ -344,38 +344,19 @@ uv sync --reinstall-package torchpcl
 
 ## Benchmarks
 
-Track operation and sampling performance without Open3D:
+Track performance per revision, with Open3D and small-gicp as reference
+baselines:
 
 ```bash
-just benchmark-operations --json runs/operations.json
-just benchmark-sampling --json runs/sampling.json
+just benchmark --keep           # every routine profile, kept in the history
+just benchmark-baselines --keep # baselines, in the Python 3.12 environment
+just benchmark-dashboard        # plot the history
+just benchmark-run registration --device cuda   # ad hoc, any parameters
 ```
 
-Both default to torchpcl. Open3D baselines can be recorded separately and reused
-with `just benchmark-compare`; see the [benchmark guide](benchmarks/README.md).
-
-
-Compare ICP and fast global registration with Open3D using the ground-truth
-pair in `data/`:
-
-```bash
-UV_PROJECT_ENVIRONMENT=.venv-benchmark \
-  uv run --python 3.12 --group baseline \
-  python benchmarks/registration.py --json results-registration.json
-```
-
-The command creates or syncs a separate Python 3.12 environment automatically.
-By default, ICP uses float32 inputs on CPU and CUDA in both libraries. Open3D
-FGR is a CPU/float64 reference because it has no tensor/CUDA API. Unavailable
-CUDA is reported as skipped per library.
-
-The output includes runtime, ground-truth accuracy, peak process RAM, and
-per-process peak VRAM. See [the benchmark guide](benchmarks/README.md) for input
-format, measurement scope, additional pairs, and CUDA options.
-
-For Redwood's four scenes, run `just download-data`, then
-`just benchmark-redwood --json results-redwood.json`. This compares torchpcl
-and Open3D FGR on non-consecutive ground-truth pairs, reporting registration
-recall using `gt.log` and `gt.info`. See the
-[Redwood benchmark guide](benchmarks/README.md#redwood-registration-benchmark)
-for the evaluation scope and smoke-test options.
+Suites cover neighbor search, preprocessing and FPFH (`operations`), farthest
+point sampling (`sampling`), ICP/FGR on a ground-truth pair (`registration`)
+and FGR recall on Redwood's four scenes (`redwood`, after `just download-data`).
+Output includes runtime, ground-truth accuracy, peak process RAM, and
+per-process peak VRAM. See the [benchmark guide](benchmarks/README.md) for
+profiles, measurement scope, the baseline environment and the history.

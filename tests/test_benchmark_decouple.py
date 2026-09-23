@@ -9,7 +9,7 @@ import sys
 import numpy as np
 import pytest
 
-from benchmarks import compare, neighbors_cases, operations, sampling
+from benchmarks import compare, neighbors_cases, run, workload
 from benchmarks.case import Case
 from benchmarks.features_cases import FeaturesConfig, prepare_features
 from benchmarks.inputs import load_fragment, random_normals
@@ -50,11 +50,12 @@ def test_torchpcl_entry_points_without_baselines(monkeypatch, tmp_path, search_d
     common = COMMON.copy()
     common[1] = search_device.type
     path = tmp_path / "operations.json"
-    report = operations.main(common + SMALL_OPS + ["--json", str(path)])
+    report = run.main(["operations"] + common + SMALL_OPS + ["--json", str(path)])
     assert json.loads(path.read_text()) == report
-    assert {row["name"] for row in report["results"]} == set(operations.ALL_OPS)
-    assert report["config"]["normals_source"] == "synthetic"
-    sampled = sampling.main(common + ["--num-points", "128", "--num-samples", "8"])
+    assert {row["name"] for row in report["results"]} == set(workload.ALL_OPS)
+    assert report["input"]["normals_source"] == "synthetic"
+    assert report["profile"] is None
+    sampled = run.main(["sampling"] + common + ["--num-points", "128", "--num-samples", "8"])
     for result in (report, sampled):
         assert result["environment"]["open3d"] is None
         assert result["config"]["backend"] == "torchpcl"
@@ -75,7 +76,7 @@ def test_timing_runs_brute_force_only_for_the_radius_guard(monkeypatch, op, brut
     monkeypatch.setattr(neighbors_cases.PreparedNeighbors, "_blocks",
                         lambda self: calls.append(op) or original(self))
 
-    operations.main(COMMON + SMALL_OPS + ["--op", op])
+    run.main(["operations"] + COMMON + SMALL_OPS + ["--op", op])
 
     assert bool(calls) is brute_forced
 
@@ -102,14 +103,14 @@ def test_ply_and_explicit_normals_without_open3d(monkeypatch, tmp_path):
     loaded_points, loaded_normals = load_fragment(path, "float32")
     np.testing.assert_array_equal(loaded_points, points)
     assert loaded_normals is None
-    args = COMMON + ["--input", "redwood", "--fragment", str(path)]
-    assert operations.main(args + ["--op", "voxelize"])["results"]
+    args = ["operations"] + COMMON + ["--input", "redwood", "--fragment", str(path)]
+    assert run.main(args + ["--op", "voxelize"])["results"]
     with pytest.raises(SystemExit, match="--normals"):
-        operations.main(args + ["--op", "fpfh"])
+        run.main(args + ["--op", "fpfh"])
     normals_path = tmp_path / "normals.npy"
     np.save(normals_path, random_normals(len(points), 0))
-    report = operations.main(args + ["--op", "fpfh", "--normals", str(normals_path)])
-    assert report["config"]["normals_source"] == "npy"
+    report = run.main(args + ["--op", "fpfh", "--normals", str(normals_path)])
+    assert report["input"]["normals_source"] == "npy"
     assert report["config"]["normals"] == str(normals_path)
     write_ply(path, normals=True)
     import torchpcl as tp
@@ -123,7 +124,7 @@ def test_ply_and_explicit_normals_without_open3d(monkeypatch, tmp_path):
         return cloud
 
     monkeypatch.setattr(tp, "load_ply", record_load)
-    assert operations.main(args + ["--op", "fpfh"])["config"]["normals_source"] == "ply"
+    assert run.main(args + ["--op", "fpfh"])["input"]["normals_source"] == "ply"
     assert len(loaded_clouds) == 1
     np.testing.assert_array_equal(loaded_clouds[0].points.numpy(), points)
     np.testing.assert_array_equal(loaded_clouds[0].normals.numpy(),
@@ -150,9 +151,9 @@ def test_normals_are_repeatable_and_quantized_without_open3d(monkeypatch):
 def test_missing_selected_backend_and_legacy_cuda(monkeypatch):
     monkeypatch.setitem(sys.modules, "open3d", None)
     with pytest.raises(SystemExit, match="Open3D is required"):
-        operations.main(COMMON + ["--backend", "open3d"])
+        run.main(["operations"] + COMMON + ["--backend", "open3d"])
     with pytest.raises(SystemExit):
-        sampling.parse_args(["--backend", "open3d-legacy", "--device", "cuda"])
+        run.parse_args(["sampling", "--backend", "open3d-legacy", "--device", "cuda"])
 
 
 def test_cross_backend_comparison_offline(tmp_path):
@@ -185,7 +186,7 @@ def test_cross_backend_comparison_offline(tmp_path):
 def test_duplicate_row_keys_are_rejected_rather_than_overwritten(tmp_path):
     """A repeated key would silently report whichever row landed last.
 
-    No driver emits one today; a parameter sweep would, and the wrong number
+    No suite emits one today; a parameter sweep would, and the wrong number
     it produces is worse than an error.
     """
     def row(name, time):

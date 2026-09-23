@@ -2,14 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from benchmarks import bench, run
 from benchmarks.case import select_devices
-from benchmarks.registration import parse_args
+from benchmarks.profiles import PROFILES
 from benchmarks.registration_cases import RegistrationConfig
 from benchmarks.runner import measure
 
 
 def test_default_devices_and_precision():
-    args = parse_args([])
+    _, _, args = run.parse_args(["registration"])
     assert args.device == "all"
     assert args.dtype == RegistrationConfig().dtype == "float32"
     assert args.voxel_size == RegistrationConfig().voxel_size == 0.05
@@ -60,3 +61,38 @@ def test_runner_synchronizes_and_excludes_setup_and_evaluation(monkeypatch):
     assert result["device"] == "cuda"
     assert result["input_dtype"] == "float32"
     assert result["memory"]["device_peak_mib"] == 20
+
+
+def test_every_profile_pins_exactly_its_suites_workload():
+    """A profile missing an argument would let that argument's default drift
+    under a series; `check_profile` runs on every parse, so parsing is the test."""
+    for name, profile in PROFILES.items():
+        suite, parsed, args = run.parse_args(["--profile", name])
+        assert (suite.name, parsed) == (profile.suite, profile)
+        assert args.threads == profile.params["threads"]
+
+
+def test_a_profile_accepts_selection_but_rejects_workload_changes(capsys):
+    _, _, args = run.parse_args(["--profile", "operations-random", "--op", "knn",
+                                 "--device", "cpu", "--repeats", "9"])
+    assert (args.op, args.device, args.repeats, args.k) == ("knn", "cpu", 9, 30)
+    for override in (["--k", "16"], ["--threads", "3"], ["--warmup", "0"]):
+        with pytest.raises(SystemExit):
+            run.parse_args(["--profile", "operations-random", *override])
+        assert "pinned" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match="belongs to the sampling suite"):
+        run.parse_args(["operations", "--profile", "sampling"])
+
+
+def test_the_sweep_plans_torchpcl_or_baselines_and_refuses_to_keep_a_dirty_tree(
+        monkeypatch):
+    routine = [profile for profile in PROFILES.values() if profile.routine]
+    assert [(p.name, backend) for p, backend in bench.plan(None, False)] == [
+        (profile.name, "torchpcl") for profile in routine]
+    baselines = bench.plan(["sampling"], True)
+    assert [backend for _, backend in baselines] == ["open3d-tensor", "open3d-legacy"]
+
+    monkeypatch.setattr(bench, "source_revision", lambda: "abc1234-dirty")
+    monkeypatch.setattr(bench.subprocess, "run", lambda *a, **k: pytest.fail("ran"))
+    with pytest.raises(SystemExit, match="committed tree"):
+        bench.main(["--keep"])

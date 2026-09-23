@@ -57,17 +57,21 @@ def test_flags_config_drift_gate_movement_and_unmatched_rows(tmp_path, capsys):
     assert f"{'normals/torchpcl/cuda':40} only in {after}" in out
 
 
-def test_reads_the_registration_report_shape(tmp_path, capsys):
+def test_grouped_rows_are_keyed_by_their_input(tmp_path, capsys):
+    """Registration and Redwood measure the same case on several inputs; the
+    group keeps those rows apart."""
     report = {
         "config": {}, "environment": {},
-        "pairs": [{"directory": "/data/office1", "results": [
-            {"name": "icp", "backend": "torchpcl", "device": "cpu",
-             "time_ms_min": 1.0, "time_ms_max": 1.0, "median": {"time_ms": 1.0}}]}],
+        "results": [
+            {"name": "icp", "group": group, "backend": "torchpcl", "device": "cpu",
+             "time_ms_min": 1.0, "time_ms_max": 1.0, "median": {"time_ms": 1.0}}
+            for group in ("office1", "office2")],
     }
     path = tmp_path / "a.json"
     path.write_text(json.dumps(report))
     main([str(path), str(path)])
-    assert "office1/icp/torchpcl/cpu" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "office1/icp/torchpcl/cpu" in out and "office2/icp/torchpcl/cpu" in out
 
 
 def test_rejects_files_that_are_not_reports(tmp_path):

@@ -15,9 +15,9 @@ def select_devices(requested: str, cuda_available: bool, backend: str = "torchpc
     """
     if requested not in ("all", "cpu", "cuda"):
         raise ValueError("device must be all, cpu, or cuda")
-    reason = reason or f"requires an accessible GPU and a CUDA {backend} build"
+    reason = reason or f"CUDA requires an accessible GPU and a CUDA {backend} build"
     if requested == "cuda" and not cuda_available:
-        raise ValueError(reason if reason.startswith(backend) else f"CUDA {reason}")
+        raise ValueError(reason)
     devices = ["cpu", "cuda"] if requested == "all" else [requested]
     skipped = []
     if "cuda" in devices and not cuda_available:
@@ -42,6 +42,8 @@ class Case:
     against). ``metadata`` carries static descriptive fields that don't vary
     across runs (e.g. dtype, or whether a backend is a reference-only
     baseline), reported by a runner alongside the measured metrics.
+    ``group`` names the input a case ran on when a suite measures several
+    (a registration pair, a Redwood fragment pair), and joins the case's key.
 
     This shape is intentionally independent of any particular runner: an
     ASV benchmark method can call ``case.reset()``/``case.run()`` directly
@@ -58,6 +60,7 @@ class Case:
     evaluate: Callable[[Any], dict] = _no_metrics
     device_memory_reader: Callable[[], int] | None = None
     metadata: dict = field(default_factory=dict)
+    group: str | None = None
 
     def run_synchronized(self):
         self.synchronize()

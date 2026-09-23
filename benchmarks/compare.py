@@ -38,33 +38,23 @@ def load(path: Path) -> dict:
         report = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"{path}: {error}") from error
-    if "config" not in report or not ("results" in report or "pairs" in report):
+    if "config" not in report or "results" not in report:
         raise SystemExit(f"{path}: not a benchmark report "
-                         "(expected 'config' and 'results' or 'pairs')")
+                         "(expected 'config' and 'results')")
     return report
 
 
 def rows(report: dict) -> dict[tuple[str, ...], dict]:
-    """Flatten a report to case key -> result.
-
-    The registration benchmark nests its rows under one entry per input pair;
-    every other script reports a flat list. Pair rows are keyed by the
-    directory name, matching the label that script prints.
-    """
-    if "results" in report:
-        return unique((key(result), result) for result in report["results"])
-    return unique(
-        ((Path(pair["directory"]).name, *key(result)), result)
-        for pair in report["pairs"] for result in pair["results"]
-    )
+    """Flatten a report to case key -> result."""
+    return unique((key(result), result) for result in report["results"])
 
 
 def unique(entries) -> dict[tuple[str, ...], dict]:
     """Index rows by key, refusing to let one silently replace another.
 
-    No current driver can emit a repeated key: one invocation runs one
-    configuration, and its operations, backend and devices are each distinct.
-    A sweep would break that -- several rows sharing a name and differing only
+    No current suite can emit a repeated key: one invocation runs one
+    configuration, and its groups, operations, backend and devices are each
+    distinct. A sweep would break that -- several rows sharing a name and differing only
     in a parameter -- and the comparison would then quietly report whichever
     row happened to land last. That is a wrong number rather than an error, so
     it is rejected here. A sweep needs the key to carry the parameter that
@@ -79,8 +69,11 @@ def unique(entries) -> dict[tuple[str, ...], dict]:
     return indexed
 
 
-def key(result: dict) -> tuple[str, str, str]:
-    return result["name"], result["backend"], result["device"]
+def key(result: dict) -> tuple[str, ...]:
+    """Group (a registration pair, a Redwood fragment pair) when there is one,
+    then case name, backend and device."""
+    group = (result["group"],) if result.get("group") else ()
+    return (*group, result["name"], result["backend"], result["device"])
 
 
 def config_differences(before: dict, after: dict) -> list[str]:
@@ -101,6 +94,18 @@ def separated(before: dict, after: dict) -> bool:
     """
     return (before["time_ms_max"] < after["time_ms_min"]
             or after["time_ms_max"] < before["time_ms_min"])
+
+
+def moved(before: dict, after: dict) -> bool:
+    """The one rule for calling a timing change real: more than `NOISE`, with
+    disjoint measured ranges. `compare.py` marks it with `*`; the dashboard
+    lists it. Rows without a measured range can never qualify."""
+    if not before["median"]["time_ms"] or None in (
+            before.get("time_ms_min"), before.get("time_ms_max"),
+            after.get("time_ms_min"), after.get("time_ms_max")):
+        return False
+    ratio = after["median"]["time_ms"] / before["median"]["time_ms"] - 1
+    return abs(ratio) > NOISE and separated(before, after)
 
 
 def metric_changes(before: dict, after: dict) -> list[str]:
@@ -199,7 +204,7 @@ def main(argv=None):
                 print(f"{'':40}   note: {note}")
         else:
             ratio = new_ms / old_ms - 1 if old_ms else float("nan")
-            mark = "*" if abs(ratio) > NOISE and separated(old, new) else " "
+            mark = "*" if moved(old, new) else " "
             print(f"{'/'.join(name):40} {old_ms:10.3f} {new_ms:10.3f} "
                   f"{100 * ratio:+8.1f}%{mark}")
             for change in metric_changes(old, new):
