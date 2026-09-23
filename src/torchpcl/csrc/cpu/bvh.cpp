@@ -1,5 +1,6 @@
 #include "backend.h"
 #include "common/checks.h"
+#include "common/distance.h"
 
 #include "cuBQL/bvh.h"
 #include "cuBQL/queries/pointData/findClosest.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -139,30 +141,39 @@ class CpuBvh final : public BvhImpl {
     check_points(queries, "queries");
     TORCH_CHECK(queries.device().is_cpu(), "queries must be a CPU tensor");
     const auto count = queries.size(0);
-    auto indices = at::empty({count, k}, queries.options().dtype(at::kInt));
+    auto indices = at::empty({count, k}, queries.options().dtype(at::kLong));
     auto distances = at::empty({count, k}, queries.options());
-    const float max_distance2 = static_cast<float>(radius * radius);
+    if (bvh_.numPrims == 0) {  // every reference point was NaN
+      indices.fill_(-1);
+      distances.fill_(std::numeric_limits<float>::infinity());
+      return {indices, distances};
+    }
+    const float bound2 = inclusive_bound2(radius);
+    const float cull2 = cull_bound2(bound2);
     const auto* points = reinterpret_cast<const cuBQL::vec3f*>(
         points_.data_ptr<float>());
     const auto* query_data = reinterpret_cast<const cuBQL::vec3f*>(
         queries.data_ptr<float>());
-    auto* output_indices = indices.data_ptr<int32_t>();
+    auto* output_indices = indices.data_ptr<int64_t>();
     auto* output_distances = distances.data_ptr<float>();
+    // One output slot: the candidate and its exact distance, or empty.
+    const auto write = [&](int64_t slot, int index, cuBQL::vec3f query) {
+      const float distance2 = index >= 0
+          ? exact_distance2(points[index], query)
+          : std::numeric_limits<float>::infinity();
+      const bool kept = index >= 0 && distance2 <= bound2;
+      output_indices[slot] = kept ? index : -1;
+      output_distances[slot] =
+          kept ? distance2 : std::numeric_limits<float>::infinity();
+    };
 
-    if (bvh_.numPrims == 0) {  // every reference point was NaN
-      indices.fill_(-1);
-      distances.fill_(max_distance2);
-      return {indices, distances};
-    }
     if (k == 1) {
       at::parallel_for(0, count, 512, [&](int64_t begin, int64_t end) {
         for (int64_t query = begin; query < end; ++query) {
-          const int index = cuBQL::points::findClosest(
-              bvh_, points, query_data[query], max_distance2);
-          output_indices[query] = index;
-          output_distances[query] = index >= 0
-              ? cuBQL::sqrDistance(points[index], query_data[query])
-              : max_distance2;
+          write(query,
+                cuBQL::points::findClosest(
+                    bvh_, points, query_data[query], cull2),
+                query_data[query]);
         }
       });
       return {indices, distances};
@@ -177,13 +188,11 @@ class CpuBvh final : public BvhImpl {
             bvh_,
             points,
             query_data[query],
-            max_distance2);
+            cull2);
         for (int64_t rank = 0; rank < k; ++rank) {
-          const bool found = rank < result.numFound;
-          output_indices[query * k + rank] =
-              found ? candidates[rank].primID : -1;
-          output_distances[query * k + rank] =
-              found ? candidates[rank].sqrDist : max_distance2;
+          write(query * k + rank,
+                rank < result.numFound ? candidates[rank].primID : -1,
+                query_data[query]);
         }
       }
     });

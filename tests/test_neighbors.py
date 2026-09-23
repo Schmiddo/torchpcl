@@ -109,8 +109,9 @@ def test_radius_boundary_is_inclusive(search_device, algorithm):
         torch.tensor(1.0, dtype=torch.float32),
         torch.tensor(torch.inf, dtype=torch.float32),
     ).item()
+    # The radius is decided in float32, so "outside" must be a float32 step.
     slightly_outside = torch.tensor(
-        [[(1.0 + next_float32) / 2, 0.0, 0.0]],
+        [[next_float32, 0.0, 0.0]],
         dtype=dtype,
         device=search_device,
     )

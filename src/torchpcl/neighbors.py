@@ -12,14 +12,6 @@ from .cloud import PointCloud, PointCloudLike, as_point_cloud
 from .validation import check_cloud_pair
 
 
-def _inclusive_backend_radius(radius: float) -> float:
-    """Expand finite radii by one float32 ULP for strict native searches."""
-    if math.isinf(radius):
-        return radius
-    value = torch.tensor(radius, dtype=torch.float32)
-    return float(torch.nextafter(value, value.new_tensor(math.inf)))
-
-
 @dataclass(frozen=True, eq=False)
 class Neighbors:
     """Fixed-width neighbor search results.
@@ -41,9 +33,11 @@ class NeighborIndex:
     ``algorithm="auto"`` uses BVH for a single reference cloud and packed
     brute force for batches. The current BVH backend cannot represent multiple
     independent clouds, so explicit ``"bvh"`` is restricted to batch size one.
-    Candidate selection uses float32 coordinates for both float32 and float64
-    inputs. Public squared distances are recomputed from the original tensors
-    in their input dtype.
+    Search runs on float32 coordinates for both float32 and float64 inputs, so
+    whether a point is within the radius is decided on its float32 squared
+    distance, identically on CPU and CUDA. Returned squared distances are in
+    the input dtype; for float64, or when autograd needs them, they are
+    recomputed from the original tensors.
     """
 
     def __init__(
@@ -101,29 +95,24 @@ class NeighborIndex:
                 valid=torch.empty(shape, dtype=torch.bool, device=query_cloud.device),
             )
 
-        # Native BVH traversal treats its culling radius as a strict bound.
-        # Expand that float32 bound just enough to retrieve boundary candidates,
-        # then apply the public inclusive bound below in the input dtype.
-        backend_radius = _inclusive_backend_radius(float(radius))
-        indices, _ = self._backend.knn(query_cloud, k, backend_radius)
-        indices = indices.to(torch.int64)
-        backend_valid = indices >= 0
-        if self._reference.points.shape[0] == 0:
-            return Neighbors(
-                indices=indices,
-                distances2=torch.full(
-                    indices.shape,
-                    math.inf,
-                    dtype=query_cloud.dtype,
-                    device=query_cloud.device,
-                ),
-                valid=backend_valid,
-            )
-        gathered = self._reference.points[indices.clamp(min=0)]
-        distances2 = (query_cloud.points[:, None] - gathered).square().sum(dim=-1)
-        valid = backend_valid & (distances2 <= radius * radius)
-        indices = indices.masked_fill(~valid, -1)
-        distances2 = distances2.masked_fill(~valid, math.inf)
+        # The native search is final for float32: which points are within the
+        # radius is decided on exact float32 distances. For other dtypes, and
+        # for autograd, the distances are recomputed from the original tensors.
+        indices, distances2 = self._backend.knn(query_cloud, k, float(radius))
+        valid = indices >= 0
+        needs_grad = torch.is_grad_enabled() and (
+            query_cloud.points.requires_grad or self._reference.points.requires_grad
+        )
+        if query_cloud.dtype != torch.float32 or needs_grad:
+            distances2 = distances2.to(query_cloud.dtype)
+            if self._reference.points.shape[0] > 0:
+                gathered = self._reference.points[indices.clamp(min=0)]
+                distances2 = (
+                    (query_cloud.points[:, None] - gathered)
+                    .square()
+                    .sum(dim=-1)
+                    .masked_fill(~valid, math.inf)
+                )
         return Neighbors(indices=indices, distances2=distances2, valid=valid)
 
     def knn(self, queries: PointCloudLike, k: int) -> Neighbors:

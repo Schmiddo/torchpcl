@@ -24,6 +24,10 @@ constexpr int kCudaBvhLeafSize = 2;
 using SearchResult = std::tuple<at::Tensor, at::Tensor>;
 using EigenResult = std::tuple<at::Tensor, at::Tensor>;
 
+// Every native search (BvhImpl::knn, packed_knn) returns up to k nearest
+// points per query within an inclusive `radius`, as final results: int64
+// indices and float32 squared distances from exact_distance2
+// (common/distance.h), with -1 and +inf in empty slots.
 class BvhImpl {
  public:
   virtual ~BvhImpl() = default;

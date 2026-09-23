@@ -1,5 +1,6 @@
 #include "backend.h"
 #include "common/candidate.h"
+#include "common/distance.h"
 
 #include <ATen/Parallel.h>
 #include <ATen/ops/empty.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace torchpcl {
 
@@ -19,15 +21,17 @@ SearchResult packed_knn_cpu(
     int64_t k,
     double radius) {
   TORCH_CHECK(points.device().is_cpu(), "points must be a CPU tensor");
-  const float max_distance2 = static_cast<float>(radius * radius);
+  // An empty slot accepts a point exactly at the bound, so the radius is
+  // inclusive (see better_candidate).
+  const float bound2 = inclusive_bound2(radius);
   auto indices = at::empty(
-      {queries.size(0), k}, queries.options().dtype(at::kInt));
+      {queries.size(0), k}, queries.options().dtype(at::kLong));
   auto distances = at::empty({queries.size(0), k}, queries.options());
   const auto* point_data = points.data_ptr<float>();
   const auto* offsets = point_offsets.data_ptr<int64_t>();
   const auto* query_data = queries.data_ptr<float>();
   const auto* batches = query_batch_ids.data_ptr<int64_t>();
-  auto* output_indices = indices.data_ptr<int32_t>();
+  auto* output_indices = indices.data_ptr<int64_t>();
   auto* output_distances = distances.data_ptr<float>();
 
   at::parallel_for(0, queries.size(0), 64, [&](int64_t begin, int64_t end) {
@@ -35,7 +39,7 @@ SearchResult packed_knn_cpu(
       float best_distances[kMaxK];
       int32_t best_indices[kMaxK];
       for (int64_t rank = 0; rank < k; ++rank) {
-        best_distances[rank] = max_distance2;
+        best_distances[rank] = bound2;
         best_indices[rank] = -1;
       }
       const int64_t batch = batches[query];
@@ -45,10 +49,9 @@ SearchResult packed_knn_cpu(
       const float query_y = query_data[query * 3 + 1];
       const float query_z = query_data[query * 3 + 2];
       for (int64_t point = point_begin; point < point_end; ++point) {
-        const float dx = query_x - point_data[point * 3];
-        const float dy = query_y - point_data[point * 3 + 1];
-        const float dz = query_z - point_data[point * 3 + 2];
-        const float distance2 = dx * dx + dy * dy + dz * dz;
+        const float distance2 = exact_distance2(
+            point_data[point * 3], point_data[point * 3 + 1],
+            point_data[point * 3 + 2], query_x, query_y, query_z);
         insert_candidate(
             best_distances,
             best_indices,
@@ -57,8 +60,11 @@ SearchResult packed_knn_cpu(
             static_cast<int32_t>(point));
       }
       for (int64_t rank = 0; rank < k; ++rank) {
+        const bool found = best_indices[rank] >= 0;
         output_indices[query * k + rank] = best_indices[rank];
-        output_distances[query * k + rank] = best_distances[rank];
+        output_distances[query * k + rank] = found
+            ? best_distances[rank]
+            : std::numeric_limits<float>::infinity();
       }
     }
   });

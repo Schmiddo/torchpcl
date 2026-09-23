@@ -23,11 +23,14 @@ def test_bvh_knn_selects_reference_topk(search_device):
         5, dim=1, largest=False
     ).values
 
-    assert indices.dtype == torch.int32
+    assert indices.dtype == torch.int64
     assert distances.dtype == torch.float32
-    torch.testing.assert_close(
-        _selected_distances(points, queries, indices), expected, atol=1e-6, rtol=1e-5
-    )
+    selected = _selected_distances(points, queries, indices)
+    torch.testing.assert_close(selected, expected, atol=1e-6, rtol=1e-5)
+    # The native distances are final: x^2 + y^2 + z^2 summed left to right,
+    # bit for bit, on every device.
+    squares = (queries[:, None] - points[indices]).square()
+    assert torch.equal(distances, squares[..., 0] + squares[..., 1] + squares[..., 2])
 
 
 def test_packed_knn_is_batch_isolated(search_device):

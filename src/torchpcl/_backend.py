@@ -46,6 +46,11 @@ def feature_knn1(
     )
 
 
+# Both backends return up to k nearest points within an inclusive radius, as
+# int64 indices and exact float32 squared distances, with -1 and inf in empty
+# slots (see csrc/backend.h).
+
+
 class BvhBackend:
     def __init__(self, reference: PointCloud) -> None:
         _check_device(reference.device)
@@ -62,12 +67,9 @@ class BvhBackend:
         if self._index is None:
             shape = (query_points.shape[0], k)
             return (
-                torch.full(shape, -1, dtype=torch.int32, device=query_points.device),
+                torch.full(shape, -1, dtype=torch.int64, device=query_points.device),
                 torch.full(
-                    shape,
-                    float(radius * radius),
-                    dtype=torch.float32,
-                    device=query_points.device,
+                    shape, torch.inf, dtype=torch.float32, device=query_points.device
                 ),
             )
         return self._index.knn(query_points, k, radius)
