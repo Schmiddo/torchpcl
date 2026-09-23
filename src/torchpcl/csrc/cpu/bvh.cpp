@@ -30,7 +30,7 @@ class CpuBvh final : public BvhImpl {
         boxes[index] = cuBQL::box3f().including(data[index]);
       }
     });
-    cuBQL::cpuBuilder(bvh_, boxes.data(), count, cuBQL::BuildConfig{});
+    cuBQL::cpuBuilder(bvh_, boxes.data(), count, cuBQL::BuildConfig(kCpuBvhLeafSize));
   }
 
   ~CpuBvh() override { cuBQL::cpu::freeBVH(bvh_); }

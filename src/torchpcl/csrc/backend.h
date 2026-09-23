@@ -9,6 +9,17 @@
 namespace torchpcl {
 
 constexpr int64_t kMaxK = 64;
+// Points per BVH leaf. cuBQL's default gives every point a leaf of its own,
+// 2N-1 nodes for N points. Larger leaves mean fewer nodes to build and walk,
+// but a fixed-radius query then tests more points outside its radius.
+// Measured on 200k-point clouds (operations-random/-redwood): on CPU, 8 cuts
+// the build by 29-40% and knn-based operations by 9-26%, while radius search
+// on uniform points slows by ~11%; 16 gains a little more but slows it by
+// ~26%. The GPU pays that radius cost sooner -- from 3 up, radius and hybrid
+// queries (radius, FPFH) slow down faster than knn speeds up -- and 2 is the
+// largest that costs neither.
+constexpr int kCpuBvhLeafSize = 8;
+constexpr int kCudaBvhLeafSize = 2;
 
 using SearchResult = std::tuple<at::Tensor, at::Tensor>;
 using EigenResult = std::tuple<at::Tensor, at::Tensor>;

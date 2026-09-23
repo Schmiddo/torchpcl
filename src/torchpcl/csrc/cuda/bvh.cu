@@ -119,7 +119,7 @@ class CudaBvh final : public BvhImpl {
         bvh_,
         reinterpret_cast<const cuBQL::box3f*>(boxes.data_ptr<float>()),
         static_cast<uint32_t>(count),
-        cuBQL::BuildConfig{},
+        cuBQL::BuildConfig(kCudaBvhLeafSize),
         stream,
         memory_resource_);
   }
