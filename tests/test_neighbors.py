@@ -26,6 +26,30 @@ def test_knn_tensor_matches_cdist(search_device):
     torch.testing.assert_close(_sorted_distances(result), expected)
 
 
+def test_parallel_cpu_bvh_build_matches_bruteforce():
+    # Large enough for the CPU builder to split into tasks, with repeated
+    # points and a flat slab so some nodes cannot be split by position.
+    generator = torch.Generator().manual_seed(0)
+    spread = torch.rand(60_000, 3, generator=generator)
+    flat = torch.rand(30_000, 3, generator=generator) * torch.tensor([1.0, 1.0, 0.0])
+    reference = torch.cat([spread, flat, spread[:10_000]])
+    queries = torch.rand(256, 3, generator=generator)
+
+    bvh = tp.knn(reference, queries, 16, algorithm="bvh")
+    brute = tp.knn(reference, queries, 16, algorithm="bruteforce")
+
+    torch.testing.assert_close(_sorted_distances(bvh), _sorted_distances(brute))
+
+
+def test_all_nan_cpu_reference_returns_invalid_neighbors():
+    # NaN points are left out of the tree; with none left there is no tree.
+    reference = torch.full((5, 3), torch.nan)
+    queries = torch.rand(4, 3)
+
+    for k in (1, 3):
+        assert not tp.knn(reference, queries, k, algorithm="bvh").valid.any()
+
+
 def test_packed_knn_is_batch_isolated_and_uses_global_indices():
     reference = tp.PointCloud(
         torch.tensor(
