@@ -99,7 +99,11 @@ class Operations(Suite):
             print(line)
         for op in supported:
             for device in devices:
-                if op in neighbors.OPS:
+                excluded = neighbors.DEVICE_EXCLUSIONS.get((backend, op, device))
+                if excluded:
+                    yield {"backend": backend, "device": device, "op": op,
+                           "reason": excluded}
+                elif op in neighbors.OPS:
                     yield neighbors.make_case(prepared.neighbors, op, backend, device,
                                               threads=args.threads)
                 elif op in preprocess.OPS:

@@ -319,10 +319,11 @@ Four scopes are measured, because the libraries divide the work differently:
 - `knn-build-query` — building and querying together, from raw points.
 
 **Read `knn-build-query` before the other three on CUDA.** Open3D's CUDA
-`knn_index()` returns in about 0.03 ms for a 200k-point reference, against
-55 ms for the same build on CPU: it defers the work to query time rather than
-building a structure. Its `index-build` and `knn` figures are therefore not
-comparable with torchpcl's in isolation, while the combined figure is what
+knn search builds no structure: `knn_index()` returns in 7 µs at any
+reference size and `knn_search` brute forces the points, its time growing
+with the reference cloud and identical on a fresh or reused index. With no
+build to time, Open3D's CUDA `index-build` is skipped, and its CUDA `knn` is
+not comparable with torchpcl's in isolation. The combined figure is what
 either library charges to answer a batch of queries from raw points.
 
 Both libraries return **squared** distances. Open3D's radius search is ragged

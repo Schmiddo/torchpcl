@@ -6,12 +6,13 @@ torchpcl builds one `NeighborIndex` that serves every search type, while
 Open3D builds a separate index per type (`knn_index`, `fixed_radius_index`);
 the build case times each library's own path to a queryable knn index.
 
-The libraries do not split that work the same way. Open3D's CUDA `knn_index`
-returns in microseconds however large the reference cloud is, and its CUDA
-query is correspondingly dearer, so `index-build` and `knn` are not comparable
-in isolation on CUDA. `knn-build-query` times both together, from raw points,
-which is the total either library actually charges for answering a batch of
-queries.
+The libraries do not split that work the same way. Open3D's CUDA knn search
+builds no index: `knn_index` only keeps the points and `knn_search` brute
+forces them, its cost growing with the reference cloud whether or not the
+index is fresh. There is no build to time, so Open3D has no CUDA `index-build`
+case, and its CUDA `knn` is not comparable with torchpcl's in isolation.
+`knn-build-query` times both together, from raw points, which is the total
+either library actually charges for answering a batch of queries.
 """
 
 from __future__ import annotations
@@ -29,6 +30,11 @@ BACKENDS = ("torchpcl", "open3d", "small-gicp")
 # small-gicp exposes k-nearest search only; it has no radius query.
 BACKEND_OPS = {"torchpcl": OPS, "open3d": OPS,
                "small-gicp": ("index-build", "knn", "knn-build-query")}
+# (backend, op, device) combinations a backend implements on other devices only.
+DEVICE_EXCLUSIONS = {
+    ("open3d", "index-build", "cuda"):
+        "Open3D builds no CUDA knn index; its knn search is brute force",
+}
 # torchpcl's search API caps neighbors per query; a radius holding more true
 # neighbors than this would silently compare a truncated result against a
 # complete one.
@@ -273,6 +279,8 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
         raise ValueError(f"{backend} does not implement {op}")
     if backend == "small-gicp" and device != "cpu":
         raise ValueError("small-gicp is CPU only")
+    if (backend, op, device) in DEVICE_EXCLUSIONS:
+        raise ValueError(DEVICE_EXCLUSIONS[backend, op, device])
     if op == "radius":
         check_radius_capacity(prepared)
 
@@ -308,7 +316,7 @@ def make_case(prepared: PreparedNeighbors, op: str, backend: str,
 
 
 __all__ = [
-    "BACKENDS", "BACKEND_OPS", "MAX_NEIGHBORS", "OPS", "NeighborsConfig",
+    "BACKENDS", "BACKEND_OPS", "DEVICE_EXCLUSIONS", "MAX_NEIGHBORS", "OPS", "NeighborsConfig",
     "PreparedNeighbors",
     "check_radius_capacity", "make_case", "prepare_neighbors",
 ]
