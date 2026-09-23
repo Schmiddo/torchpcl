@@ -181,6 +181,7 @@ def latest_movement(charts: list[dict]) -> list[dict]:
 
         moves.append({
             "label": f"{chart_title(chart)} · {chart['device']}",
+            "case": chart_title(chart),
             "profile": chart["profile"], "version": chart["version"],
             "current": chart["current"],
             "machine": chart["machine"], "device": chart["device"],
@@ -380,6 +381,12 @@ TEMPLATE = r"""<!DOCTYPE html>
   }
   .movement h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px;
                  color: var(--text-secondary); }
+  .movement .columns { display: grid; gap: 12px 32px;
+                       grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+  .movement h3 { font-size: 12px; font-weight: 600; margin: 0 0 8px;
+                 text-transform: uppercase; letter-spacing: .04em; color: var(--text-primary); }
+  .movement h3 span { font-weight: 400; text-transform: none; letter-spacing: 0;
+                      color: var(--text-muted); margin-left: 6px; }
   .movement ul { list-style: none; margin: 0; padding: 0;
                  display: flex; flex-direction: column; gap: 6px; }
   .movement li { display: flex; gap: 10px; align-items: baseline; }
@@ -491,7 +498,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 
   <section class="movement" id="movement" hidden>
     <h2 id="movement-title"></h2>
-    <ul id="movement-list"></ul>
+    <div class="columns" id="movement-columns"></div>
   </section>
 
   <div id="sections"></div>
@@ -985,33 +992,41 @@ function drawCard(chart) {
   return card;
 }
 
+// One column per device, CUDA first, so a change on one device is read
+// beside the other rather than interleaved with it.
 function drawMovement(moves) {
   const section = document.getElementById("movement");
-  const list = document.getElementById("movement-list");
-  const title = document.getElementById("movement-title");
-  list.textContent = "";
-  const real = moves.filter((m) => m.significant);
-  if (!moves.length) { section.hidden = true; return; }
-  section.hidden = false;
-  title.textContent = real.length
-    ? `torchpcl, newest stored revision vs the one before it: `
-      + `${real.filter((m) => m.ratio > 0).length} slower, `
-      + `${real.filter((m) => m.ratio < 0).length} faster`
-    : "torchpcl, newest stored revision vs the one before it: "
-      + "nothing moved beyond its measured spread";
-  for (const move of real) {
-    const mark = el("span", {
-      class: `mark ${move.ratio > 0 ? "up" : "down"}`,
-      text: `${move.ratio > 0 ? "▲" : "▼"} ${(move.ratio * 100).toFixed(1)}%`,
-    });
-    list.appendChild(el("li", {}, [
-      mark,
-      el("span", { class: "case", text: move.label }),
-      el("span", {
-        class: "detail",
-        text: `${fmtMs(move.before)} → ${fmtMs(move.after)} ms · ${move.profile} · `
-              + `${shortRev(move.from_revision)} → ${shortRev(move.to_revision)}`,
-      }),
+  const columns = document.getElementById("movement-columns");
+  columns.textContent = "";
+  section.hidden = !moves.length;
+  if (!moves.length) return;
+  document.getElementById("movement-title").textContent =
+    "torchpcl, newest stored revision vs the one before it";
+  const devices = [...new Set(moves.map((m) => m.device))].sort(byDevice);
+  for (const device of devices) {
+    const real = moves.filter((m) => m.device === device && m.significant);
+    const slower = real.filter((m) => m.ratio > 0).length;
+    const summary = real.length
+      ? `${slower} slower, ${real.length - slower} faster`
+      : "nothing moved beyond its measured spread";
+    const list = el("ul");
+    for (const move of real) {
+      list.appendChild(el("li", {}, [
+        el("span", {
+          class: `mark ${move.ratio > 0 ? "up" : "down"}`,
+          text: `${move.ratio > 0 ? "▲" : "▼"} ${(move.ratio * 100).toFixed(1)}%`,
+        }),
+        el("span", { class: "case", text: move.case }),
+        el("span", {
+          class: "detail",
+          text: `${fmtMs(move.before)} → ${fmtMs(move.after)} ms · ${move.profile} · `
+                + `${shortRev(move.from_revision)} → ${shortRev(move.to_revision)}`,
+        }),
+      ]));
+    }
+    columns.appendChild(el("div", {}, [
+      el("h3", {}, [document.createTextNode(device), el("span", { text: summary })]),
+      list,
     ]));
   }
 }
