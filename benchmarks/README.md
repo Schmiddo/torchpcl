@@ -528,7 +528,14 @@ Refused rather than stored:
 
 Re-keeping the same revision is a no-op; `--replace` overwrites its points.
 
-`dashboard.py` renders the history into one page: one card per case of a
+`dashboard.py` renders the history into one page. An overview matrix at the
+top lists each case's newest torchpcl time for every profile and device on
+one line (a suite with several profiles, like `operations`, gets its own
+block; the rest share one), with
+its factor against the fastest baseline (coloured only when the measured
+ranges are disjoint) and any movement since the previous revision; each cell
+links to its card. Below it the cards sit in one collapsible section per
+device, CUDA first and collapsed on load: one card per case of a
 profile version, torchpcl's series across revisions with its measured min/max
 as a band, and each baseline as a dashed reference line at its newest
 measurement, labelled with its library version. Superseded profile versions

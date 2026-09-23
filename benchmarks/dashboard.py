@@ -7,6 +7,10 @@ only a reload -- and so the page can be read from another computer. With
 so that copy needs no server, no network and no dependencies and can be
 attached to a message and still work.
 
+An overview matrix at the top puts each case's newest torchpcl time on every
+profile and device side by side, against the fastest baseline; below it the
+cards sit in one collapsible section per device, CUDA first, collapsed on load.
+
 One card per measured case of a profile version: torchpcl's series across
 revisions, with its measured min/max as a band, because a median alone cannot
 distinguish a regression from a busy machine. Baselines are reference values
@@ -177,7 +181,8 @@ def latest_movement(charts: list[dict]) -> list[dict]:
 
         moves.append({
             "label": f"{chart_title(chart)} · {chart['device']}",
-            "profile": chart["profile"], "current": chart["current"],
+            "profile": chart["profile"], "version": chart["version"],
+            "current": chart["current"],
             "machine": chart["machine"], "device": chart["device"],
             "before": before["median"], "after": after["median"],
             "from_revision": before["revision"], "to_revision": after["revision"],
@@ -197,7 +202,6 @@ def page_data(rows: list[dict], baselines: list[dict] | None = None) -> dict:
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "machines": sorted({row["machine"] for row in rows}),
         "profiles": sorted({chart["profile"] for chart in charts}),
-        "devices": sorted({chart["device"] for chart in charts}),
         "charts": charts,
         "movement": latest_movement(charts),
         "environments": sorted(
@@ -326,7 +330,7 @@ TEMPLATE = r"""<!DOCTYPE html>
     --critical:       #d03b3b;
   }
   @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) {
+    :root {
       color-scheme: dark;
       --page:           #0d0d0d;
       --surface-1:      #1a1a19;
@@ -342,21 +346,6 @@ TEMPLATE = r"""<!DOCTYPE html>
       --series-4:       #c98500;
     }
   }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --page:           #0d0d0d;
-    --surface-1:      #1a1a19;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --grid:           #2c2c2a;
-    --axis:           #383835;
-    --border:         rgba(255, 255, 255, 0.10);
-    --series-1:       #3987e5;
-    --series-2:       #d95926;
-    --series-3:       #199e70;
-    --series-4:       #c98500;
-  }
 
   * { box-sizing: border-box; }
   body {
@@ -366,7 +355,7 @@ TEMPLATE = r"""<!DOCTYPE html>
     color: var(--text-primary);
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  .wrap { max-width: 1180px; margin: 0 auto; }
+  .wrap { max-width: 1400px; margin: 0 auto; }
   h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
   .sub { color: var(--text-secondary); margin: 0 0 24px; }
   .sub code { color: var(--text-secondary); }
@@ -377,12 +366,11 @@ TEMPLATE = r"""<!DOCTYPE html>
   }
   .filters label { display: flex; flex-direction: column; gap: 4px;
                    font-size: 12px; color: var(--text-muted); }
-  .filters select, .filters button {
+  .filters select {
     font: inherit; font-size: 13px; padding: 6px 10px;
     background: var(--surface-1); color: var(--text-primary);
     border: 1px solid var(--border); border-radius: 6px;
   }
-  .filters button { cursor: pointer; align-self: flex-end; }
   .filters .check { flex-direction: row; align-items: center; gap: 6px;
                     align-self: flex-end; padding-bottom: 7px; }
 
@@ -402,12 +390,56 @@ TEMPLATE = r"""<!DOCTYPE html>
   .movement .case { color: var(--text-primary); }
   .movement .detail { color: var(--text-muted); font-size: 12px; }
 
+  .overview { display: flex; flex-direction: column; gap: 18px; margin-bottom: 24px; }
+  .overview .block {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px 10px; overflow-x: auto;
+  }
+  .overview tr.suite th { font-size: 12px; font-weight: 600; color: var(--text-secondary);
+                          padding-top: 10px; }
+  .overview h2 { font-size: 13px; font-weight: 600; margin: 0 0 6px;
+                 color: var(--text-secondary); }
+  .overview table { margin: 0; font-size: 13px; width: auto; min-width: 100%; }
+  .overview thead tr:not(:last-child) th { border-bottom: none; padding-bottom: 0; }
+  .overview th, .overview td { white-space: nowrap; padding: 4px 8px; }
+  .overview th { font-size: 11px; text-align: left; }
+  .overview th.device { text-transform: uppercase; letter-spacing: .04em; }
+  .overview th.profile { color: var(--text-secondary); }
+  .overview td a { color: inherit; text-decoration: none; }
+  .overview td a:hover b { text-decoration: underline; }
+  .overview td b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .overview td { text-align: left; }
+  .overview .versus { font-size: 11px; color: var(--text-muted); margin-left: 6px; }
+  .overview .versus.faster { color: var(--good); }
+  .overview .versus.slower { color: var(--critical); }
+  .overview .mark { font-size: 11px; margin-left: 6px; color: var(--text-muted);
+                    font-variant-numeric: tabular-nums; }
+  .overview .mark.up { color: var(--critical); }
+  .overview .mark.down { color: var(--good); }
+
+  details.device-section { margin: 0 0 12px; border-top: 1px solid var(--border); }
+  details.device-section > summary {
+    font-size: 22px; font-weight: 600; color: var(--text-primary);
+    padding: 14px 0; list-style-position: inside;
+  }
+  details.device-section[open] > summary { padding-bottom: 18px; }
+  details.device-section > summary .count { font-size: 13px; font-weight: 400;
+                                            color: var(--text-muted); margin-left: 10px; }
+
   .grid { display: grid; gap: 18px;
           grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
   .card {
     background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: 10px; padding: 16px 16px 12px;
+    border-radius: 10px; padding: 16px 16px 12px; scroll-margin-top: 16px;
   }
+  /* The card a matrix cell jumped to. */
+  .card:target { outline: 2px solid var(--series-1); outline-offset: 2px;
+                 animation: arrive 1.2s ease-out; }
+  @keyframes arrive {
+    from { box-shadow: 0 0 0 8px color-mix(in srgb, var(--series-1) 35%, transparent); }
+    to   { box-shadow: 0 0 0 0 transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) { .card:target { animation: none; } }
   .card h3 { font-size: 14px; font-weight: 600; margin: 0; }
   /* Without an explicit ratio the scaled SVG does not contribute its height to
      the card, and the legend and table below it spill past the card border. */
@@ -452,17 +484,17 @@ TEMPLATE = r"""<!DOCTYPE html>
   <div class="filters">
     <label>Machine <select id="machine"></select></label>
     <label>Profile <select id="profile"></select></label>
-    <label>Device <select id="device"></select></label>
     <label class="check"><input type="checkbox" id="retired"> superseded profile versions</label>
-    <button id="theme" type="button">Toggle theme</button>
   </div>
+
+  <section class="overview" id="overview" hidden></section>
 
   <section class="movement" id="movement" hidden>
     <h2 id="movement-title"></h2>
     <ul id="movement-list"></ul>
   </section>
 
-  <div class="grid" id="grid"></div>
+  <div id="sections"></div>
   <p class="empty" id="empty" hidden>No cards match these filters.</p>
 
   <footer id="environments"></footer>
@@ -757,9 +789,180 @@ function drawTable(chart) {
 const title = (chart) => [chart.group, chart.name].filter(Boolean).join("/");
 const refLabel = (ref) => `${ref.backend} ${ref.version || ""}`.trim();
 
+// Cases are keyed without their device, so the overview can put a case's
+// devices side by side and a matrix cell can point at its card.
+const caseKey = (chart) =>
+  [chart.machine, chart.profile, chart.version, chart.group || "", chart.name].join("|");
+const cardId = (chart) => `card-${caseKey(chart)}|${chart.device}`.replace(/[^\w.-]/g, "_");
+
+// CUDA first: it is what torchpcl is for. Any other device follows the two.
+const DEVICE_ORDER = ["cuda", "cpu"];
+const deviceRank = (device) => {
+  const rank = DEVICE_ORDER.indexOf(device);
+  return rank < 0 ? DEVICE_ORDER.length : rank;
+};
+const byDevice = (a, b) => deviceRank(a) - deviceRank(b) || a.localeCompare(b);
+
+// torchpcl's newest point against the fastest baseline on the same card.
+// Coloured only when the measured ranges are disjoint -- the same test the
+// movement banner applies -- so overlapping noise never reads as a win.
+function versus(chart) {
+  const series = chart.series.find((entry) => entry.backend === "torchpcl");
+  const last = series && series.points[series.points.length - 1];
+  if (!last || !chart.references.length) return null;
+  const best = chart.references.reduce((a, b) => (b.median < a.median ? b : a));
+  const faster = best.median >= last.median;
+  const factor = faster ? best.median / last.median : last.median / best.median;
+  const known = [last.min, last.max, best.min, best.max].every((v) => typeof v === "number");
+  const disjoint = known && (last.max < best.min || best.max < last.min);
+  return {
+    text: `${factor.toFixed(factor >= 10 ? 0 : 1)}× ${faster ? "faster" : "slower"} than ${best.backend}`,
+    title: `${fmtMs(best.median)} ms, ${refLabel(best)}`,
+    tone: disjoint ? (faster ? "faster" : "slower") : "",
+  };
+}
+
+// A suite measured under several profiles gets a block of its own, with its
+// cases as rows and each profile's devices as columns, so a case measured on
+// two inputs reads across one line. Suites with a single profile share one
+// block whose columns are just the devices.
+function drawOverview(charts, moves) {
+  const section = document.getElementById("overview");
+  section.textContent = "";
+  section.hidden = !charts.length;
+  if (!charts.length) return;
+
+  const machines = new Set(charts.map((chart) => chart.machine));
+  const moved = new Map(moves.map(
+    (m) => [`${m.machine}|${m.profile}|${m.version}|${m.label}`, m]));
+  const profilesOf = new Map();
+  for (const chart of charts) {
+    const suite = `${chart.machine}|${chart.suite}`;
+    if (!profilesOf.has(suite)) profilesOf.set(suite, new Set());
+    profilesOf.get(suite).add(`${chart.profile}|${chart.version}`);
+  }
+  const blocks = new Map();
+  for (const chart of charts) {
+    const shared = profilesOf.get(`${chart.machine}|${chart.suite}`).size === 1;
+    const blockKey = `${chart.machine}|${shared ? "" : chart.suite}`;
+    if (!blocks.has(blockKey)) {
+      const name = shared ? "" : chart.suite;
+      blocks.set(blockKey, {
+        title: [name, machines.size > 1 ? chart.machine : ""].filter(Boolean).join(" · "),
+        shared, profiles: new Map(), rows: new Map() });
+    }
+    const block = blocks.get(blockKey);
+    const profileKey = shared ? "" : `${chart.profile}|${chart.version}`;
+    if (!block.profiles.has(profileKey)) {
+      const short = chart.profile.startsWith(`${chart.suite}-`)
+        ? chart.profile.slice(chart.suite.length + 1) : chart.profile;
+      block.profiles.set(profileKey, {
+        label: chart.current ? short : `${short} v${chart.version}`, devices: new Set() });
+    }
+    block.profiles.get(profileKey).devices.add(chart.device);
+    const rowKey = `${chart.suite}|${title(chart)}`;
+    if (!block.rows.has(rowKey)) {
+      block.rows.set(rowKey, { suite: chart.suite, name: title(chart), cells: new Map() });
+    }
+    block.rows.get(rowKey).cells.set(`${profileKey}|${chart.device}`, chart);
+  }
+
+  for (const block of blocks.values()) {
+    const columns = [];
+    const profileRow = el("tr", {}, [el("th")]);
+    const deviceRow = el("tr", {}, [el("th", { text: "case" })]);
+    for (const [profileKey, profile] of block.profiles) {
+      const devices = [...profile.devices].sort(byDevice);
+      profileRow.appendChild(el("th", {
+        class: "profile", colspan: devices.length, text: profile.label }));
+      devices.forEach((device) => {
+        columns.push(`${profileKey}|${device}`);
+        deviceRow.appendChild(el("th", { class: "device", text: device }));
+      });
+    }
+    const head = block.profiles.size > 1 ? [profileRow, deviceRow] : [deviceRow];
+    const body = [];
+    let suite = null;
+    for (const row of block.rows.values()) {
+      if (block.shared && row.suite !== suite) {
+        suite = row.suite;
+        body.push(el("tr", { class: "suite" }, [
+          el("th", { colspan: columns.length + 1, text: suite })]));
+      }
+      const tr = el("tr", {}, [el("td", { text: row.name })]);
+      columns.forEach((column) => tr.appendChild(drawCell(row.cells.get(column), moved)));
+      body.push(tr);
+    }
+    const kids = block.title ? [el("h2", { text: block.title })] : [];
+    kids.push(el("table", {}, [el("thead", {}, head), el("tbody", {}, body)]));
+    section.appendChild(el("div", { class: "block" }, kids));
+  }
+}
+
+// Opens the section holding a card so an anchor to it has somewhere to land.
+function reveal(id) {
+  const card = document.getElementById(id);
+  const section = card && card.closest("details");
+  if (section) section.open = true;
+  return card;
+}
+
+function drawCell(chart, moved) {
+  const series = chart && chart.series.find((entry) => entry.backend === "torchpcl");
+  const last = series && series.points[series.points.length - 1];
+  if (!last) return el("td", { text: "–" });
+  const link = el("a", { href: `#${cardId(chart)}` }, [
+    el("b", { text: `${fmtMs(last.median)} ms` })]);
+  const move = moved.get(
+    `${chart.machine}|${chart.profile}|${chart.version}|${title(chart)} · ${chart.device}`);
+  // Change since torchpcl's previous stored revision. Coloured only when
+  // `compare.moved` accepts it; within the measured spread it stays muted.
+  if (move) {
+    const tone = move.significant ? (move.ratio > 0 ? "up" : "down") : "";
+    link.appendChild(el("span", {
+      class: `mark ${tone}`,
+      text: `${move.ratio > 0 ? "▲" : "▼"}${Math.abs(move.ratio * 100).toFixed(1)}%`,
+      title: `${fmtMs(move.before)} → ${fmtMs(move.after)} ms, `
+             + `${shortRev(move.from_revision)} → ${shortRev(move.to_revision)}`,
+    }));
+  }
+  const against = versus(chart);
+  if (against) {
+    link.appendChild(el("span", {
+      class: `versus ${against.tone}`, text: against.text, title: against.title }));
+  }
+  link.addEventListener("click", () => reveal(cardId(chart)));
+  return el("td", {}, [link]);
+}
+
+// Collapsed on load; a filter change redraws the cards but keeps whichever
+// sections the reader has opened since.
+function drawSections(charts) {
+  const container = document.getElementById("sections");
+  const open = new Set([...container.querySelectorAll("details[open]")]
+    .map((section) => section.dataset.device));
+  container.textContent = "";
+  const devices = [...new Set(charts.map((chart) => chart.device))].sort(byDevice);
+  for (const device of devices) {
+    const cards = charts.filter((chart) => chart.device === device);
+    const grid = el("div", { class: "grid" });
+    cards.forEach((chart) => grid.appendChild(drawCard(chart)));
+    const section = el("details", {
+      class: "device-section", id: `section-${device}`, "data-device": device }, [
+      el("summary", {}, [
+        document.createTextNode(device.toUpperCase()),
+        el("span", { class: "count", text: `${cards.length} cases` }),
+      ]),
+      grid,
+    ]);
+    section.open = open.has(device);
+    container.appendChild(section);
+  }
+}
+
 function drawCard(chart) {
   const version = chart.current ? "" : ` · superseded v${chart.version}`;
-  const card = el("div", { class: "card" }, [
+  const card = el("div", { class: "card", id: cardId(chart) }, [
     el("h3", { text: `${title(chart)} · ${chart.device}` }),
     el("p", { class: "meta", text: `${chart.profile}${version}` }),
   ]);
@@ -822,20 +1025,18 @@ function fill(select, values, allLabel) {
 function apply() {
   const machine = document.getElementById("machine").value;
   const profile = document.getElementById("profile").value;
-  const device = document.getElementById("device").value;
   const retired = document.getElementById("retired").checked;
   const matches = (item) =>
     (!machine || item.machine === machine)
     && (!profile || item.profile === profile)
-    && (!device || item.device === device)
     && (retired || item.current);
 
-  const grid = document.getElementById("grid");
-  grid.textContent = "";
   const charts = DATA.charts.filter(matches);
-  charts.forEach((chart) => grid.appendChild(drawCard(chart)));
+  const moves = DATA.movement.filter(matches);
+  drawOverview(charts, moves);
+  drawSections(charts);
   document.getElementById("empty").hidden = charts.length > 0;
-  drawMovement(DATA.movement.filter(matches));
+  drawMovement(moves);
 }
 
 function init() {
@@ -846,14 +1047,8 @@ function init() {
 
   fill(document.getElementById("machine"), DATA.machines, "All machines");
   fill(document.getElementById("profile"), DATA.profiles, "All profiles");
-  fill(document.getElementById("device"), DATA.devices, "All devices");
-  ["machine", "profile", "device", "retired"].forEach((id) =>
+  ["machine", "profile", "retired"].forEach((id) =>
     document.getElementById(id).addEventListener("change", apply));
-
-  document.getElementById("theme").addEventListener("click", () => {
-    const dark = document.documentElement.getAttribute("data-theme") === "dark";
-    document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
-  });
 
   const footer = document.getElementById("environments");
   DATA.environments.forEach(([machine, platform, gpu, torch, python]) => {
@@ -863,6 +1058,10 @@ function init() {
     }));
   });
   apply();
+  // A shared link to a card: its section starts collapsed like the others,
+  // so open it before the browser's own jump would have landed.
+  const linked = location.hash && reveal(decodeURIComponent(location.hash.slice(1)));
+  if (linked) linked.scrollIntoView();
 }
 
 init();
