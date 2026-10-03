@@ -469,6 +469,8 @@ def _pack_aligned_shape(
 
 def batch_ids(offsets: torch.Tensor, total_size: int) -> torch.Tensor:
     """Return the batch index for every row represented by ``offsets``."""
+    if offsets.shape[0] == 2:
+        return torch.zeros(total_size, dtype=torch.int64, device=offsets.device)
     lengths = offsets[1:] - offsets[:-1]
     return torch.repeat_interleave(
         torch.arange(lengths.shape[0], device=offsets.device),
