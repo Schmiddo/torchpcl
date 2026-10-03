@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 import torchpcl as tp
@@ -60,3 +61,30 @@ def test_cpu_feature_matching_matches_dense_for_fpfh_dimension():
 
     assert torch.equal(result.target_indices, dense.argmin(dim=1))
     assert torch.allclose(result.distances2, dense.min(dim=1).values, atol=1e-4)
+
+
+@pytest.mark.parametrize("dimension", [33, 7])
+def test_mutual_matching_breaks_ties_toward_lower_rows(search_device, dimension):
+    # Small integers make exact distance ties common and every distance exact.
+    generator = torch.Generator().manual_seed(5)
+    source_features = torch.randint(0, 3, (300, dimension), generator=generator).float()
+    target_features = torch.randint(0, 3, (257, dimension), generator=generator).float()
+    source = tp.PointCloud.from_points(
+        torch.zeros(300, 3, device=search_device),
+        features=source_features.to(search_device),
+    )
+    target = tp.PointCloud.from_points(
+        torch.zeros(257, 3, device=search_device),
+        features=target_features.to(search_device),
+    )
+    result = tp.match_features(source, target, mutual=True)
+
+    differences = source_features[:, None] - target_features[None]
+    dense = differences.square().sum(dim=2)  # exact for small integers
+    forward = dense.argmin(dim=1)  # first minimum: the lower row wins ties
+    reverse = dense.argmin(dim=0)
+    rows = torch.arange(300)
+    keep = reverse[forward] == rows
+    assert torch.equal(result.source_indices.cpu(), rows[keep])
+    assert torch.equal(result.target_indices.cpu(), forward[keep])
+    assert torch.equal(result.distances2.cpu(), dense.min(dim=1).values[keep])

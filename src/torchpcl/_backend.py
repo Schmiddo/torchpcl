@@ -46,6 +46,16 @@ def feature_knn1(
     )
 
 
+def feature_mutual_knn1(
+    source: torch.Tensor, target: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return nearest target rows of source rows and vice versa, with distances."""
+    _check_device(source.device)
+    return _C.feature_mutual_knn1(
+        source.detach().contiguous(), target.detach().contiguous()
+    )
+
+
 # Both backends return up to k nearest points within an inclusive radius, as
 # int64 indices and exact float32 squared distances, with -1 and inf in empty
 # slots (see csrc/backend.h).
@@ -104,5 +114,6 @@ __all__ = [
     "PackedBackend",
     "farthest_point_sample",
     "feature_knn1",
+    "feature_mutual_knn1",
     "symmetric_eigh_3x3",
 ]

@@ -81,6 +81,29 @@ SearchResult feature_knn1(
   TORCH_CHECK(false, "unsupported feature device: ", reference.device());
 }
 
+MutualSearchResult feature_mutual_knn1(
+    const at::Tensor& source, const at::Tensor& target) {
+  check_feature_pair(target, source);
+  if (source.device().is_cpu()) {
+    return feature_mutual_knn1_cpu(source, target);
+  }
+  if (source.is_cuda()) {
+#ifdef TORCHPCL_WITH_CUDA
+    // Each direction is one kernel launch; sharing distances would need a
+    // cross-thread column reduction that costs more than it saves.
+    auto [indices, distances2] = feature_knn1_cuda(target, source);
+    auto [reverse_indices, reverse_distances2] = feature_knn1_cuda(source, target);
+    return {indices, distances2, reverse_indices, reverse_distances2};
+#else
+    TORCH_CHECK(
+        false,
+        "torchpcl was built without CUDA support; reinstall with "
+        "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit");
+#endif
+  }
+  TORCH_CHECK(false, "unsupported feature device: ", source.device());
+}
+
 EigenResult symmetric_eigh_3x3(const at::Tensor& matrices) {
   TORCH_CHECK(
       matrices.scalar_type() == at::kFloat ||
@@ -151,6 +174,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       .def("knn", &torchpcl::BvhIndex::knn);
   module.def("packed_knn", &torchpcl::packed_knn);
   module.def("feature_knn1", &torchpcl::feature_knn1);
+  module.def("feature_mutual_knn1", &torchpcl::feature_mutual_knn1);
   module.def("symmetric_eigh_3x3", &torchpcl::symmetric_eigh_3x3);
   module.def("farthest_point_sample", &torchpcl::farthest_point_sample);
   module.def("has_cuda", &torchpcl::has_cuda);

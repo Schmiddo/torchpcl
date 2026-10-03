@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from ._backend import feature_knn1
+from ._backend import feature_knn1, feature_mutual_knn1
 from .cloud import PointCloud
 from .validation import check_cloud_pair
 
@@ -71,8 +71,8 @@ def match_features(
     """Match point-aligned features using exact squared L2 distance.
 
     This implementation supports one source and target cloud. The exact
-    exhaustive search uses bounded query blocks, avoiding a full descriptor
-    distance matrix.
+    exhaustive search never materializes the descriptor distance matrix.
+    Ties go to the lower row.
     """
     if not isinstance(source, PointCloud) or not isinstance(target, PointCloud):
         raise TypeError("source and target must be PointCloud objects")
@@ -97,12 +97,15 @@ def match_features(
             distances2=source_features.new_empty(0),
         )
 
-    target_indices, distances2 = feature_knn1(target_features, source_features)
     source_indices = torch.arange(
         source_features.shape[0], dtype=torch.int64, device=source.device
     )
-    if mutual:
-        reverse, _ = feature_knn1(source_features, target_features)
+    if not mutual:
+        target_indices, distances2 = feature_knn1(target_features, source_features)
+    else:
+        target_indices, distances2, reverse, _ = feature_mutual_knn1(
+            source_features, target_features
+        )
         keep = reverse[target_indices] == source_indices
         source_indices = source_indices[keep]
         target_indices = target_indices[keep]

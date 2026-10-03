@@ -12,9 +12,15 @@
 namespace torchpcl {
 namespace {
 
-constexpr int kBlock = 256;
-constexpr int kWarp = 32;
+constexpr int kBlock = 128;
+// Reference rows per tile, and components per chunk of a row.
+constexpr int kRows = 32;
+constexpr int kChunk = 32;
 
+// One thread per query. The block stages a tile of kRows reference rows in
+// shared memory one kChunk-component chunk at a time, which every thread
+// reads in lockstep (a broadcast); each thread holds its query's chunk and
+// the tile's kRows partial distances in registers. Ties keep the lower index.
 template <typename scalar_t>
 __global__ void feature_knn1_kernel(
     int64_t* output_indices,
@@ -23,39 +29,60 @@ __global__ void feature_knn1_kernel(
     const scalar_t* queries,
     int64_t reference_count,
     int64_t query_count,
-    int64_t dimension,
-    scalar_t initial_distance2) {
-  const int lane = threadIdx.x % kWarp;
-  const int warp = threadIdx.x / kWarp;
-  const int warps_per_block = blockDim.x / kWarp;
-  const int64_t query =
-      static_cast<int64_t>(blockIdx.x) * warps_per_block + warp;
-  if (query >= query_count) {
-    return;
-  }
+    int64_t dimension) {
+  __shared__ scalar_t tile[kRows][kChunk];
+  const int64_t query = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const bool active = query < query_count;
+  // Inactive threads still help stage tiles; they read row 0 and discard it.
+  const scalar_t* query_row = queries + (active ? query : 0) * dimension;
 
-  scalar_t best_distance2 = initial_distance2;
+  scalar_t best_distance2 = std::numeric_limits<scalar_t>::infinity();
   int64_t best_index = -1;
-  const scalar_t* query_row = queries + query * dimension;
-  for (int64_t candidate = 0; candidate < reference_count; ++candidate) {
-    const scalar_t* reference_row = reference + candidate * dimension;
-    scalar_t distance2 = 0;
-    for (int64_t component = lane; component < dimension; component += kWarp) {
-      const scalar_t delta = query_row[component] - reference_row[component];
-      distance2 += delta * delta;
+  for (int64_t start = 0; start < reference_count; start += kRows) {
+    const int rows = static_cast<int>(
+        min(static_cast<int64_t>(kRows), reference_count - start));
+    scalar_t distances2[kRows];
+#pragma unroll
+    for (int row = 0; row < kRows; ++row) distances2[row] = scalar_t(0);
+
+    for (int64_t first = 0; first < dimension; first += kChunk) {
+      const int components = static_cast<int>(
+          min(static_cast<int64_t>(kChunk), dimension - first));
+      __syncthreads();
+      // Padding rows and components are zero on both sides, adding nothing.
+      for (int offset = threadIdx.x; offset < kRows * kChunk; offset += blockDim.x) {
+        const int row = offset / kChunk;
+        const int component = offset % kChunk;
+        tile[row][component] = row < rows && component < components
+            ? reference[(start + row) * dimension + first + component]
+            : scalar_t(0);
+      }
+      __syncthreads();
+      scalar_t chunk[kChunk];
+#pragma unroll
+      for (int component = 0; component < kChunk; ++component) {
+        chunk[component] = component < components
+            ? __ldg(query_row + first + component)
+            : scalar_t(0);
+      }
+#pragma unroll
+      for (int row = 0; row < kRows; ++row) {
+#pragma unroll
+        for (int component = 0; component < kChunk; ++component) {
+          const scalar_t delta = chunk[component] - tile[row][component];
+          distances2[row] += delta * delta;
+        }
+      }
     }
-    for (int offset = kWarp / 2; offset > 0; offset /= 2) {
-      distance2 += __shfl_down_sync(0xffffffff, distance2, offset);
-    }
-    if (lane == 0 &&
-        (distance2 < best_distance2 ||
-         (distance2 == best_distance2 &&
-          (best_index < 0 || candidate < best_index)))) {
-      best_distance2 = distance2;
-      best_index = candidate;
+#pragma unroll
+    for (int row = 0; row < kRows; ++row) {
+      if (row < rows && distances2[row] < best_distance2) {
+        best_distance2 = distances2[row];
+        best_index = start + row;
+      }
     }
   }
-  if (lane == 0) {
+  if (active) {
     output_indices[query] = best_index;
     output_distances2[query] = best_distance2;
   }
@@ -73,9 +100,7 @@ SearchResult feature_knn1_cuda(
   }
 
   const auto stream = at::cuda::getCurrentCUDAStream();
-  constexpr int warps_per_block = kBlock / kWarp;
-  const auto blocks =
-      (queries.size(0) + warps_per_block - 1) / warps_per_block;
+  const auto blocks = (queries.size(0) + kBlock - 1) / kBlock;
   AT_DISPATCH_FLOATING_TYPES(
       reference.scalar_type(), "feature_knn1_cuda", [&] {
         feature_knn1_kernel<scalar_t><<<blocks, kBlock, 0, stream>>>(
@@ -85,8 +110,7 @@ SearchResult feature_knn1_cuda(
             queries.data_ptr<scalar_t>(),
             reference.size(0),
             queries.size(0),
-            reference.size(1),
-            std::numeric_limits<scalar_t>::infinity());
+            reference.size(1));
       });
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {indices, distances2};
