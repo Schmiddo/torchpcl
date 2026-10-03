@@ -319,7 +319,8 @@ class Redwood(Suite):
                 source, target = fragment(truth.source), fragment(truth.target)
                 pair = PreparedPair(data / f"{scene}-fragments-ply", config,
                                     truth.transform, (source[0], target[0]),
-                                    (source[1], target[1]), (source[2], target[2]))
+                                    (source[1], target[1]), (source[2], target[2]),
+                                    (source[3], target[3]))
                 for device in devices:
                     yield _grouped(make_case(pair, truth, args.backend, device,
                                              open3d_metrics=args.open3d_metrics),
