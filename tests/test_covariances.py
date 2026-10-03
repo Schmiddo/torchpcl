@@ -63,3 +63,21 @@ def test_hybrid_covariances_keep_empty_batches_and_zero_invalid_rows(search_devi
     assert result.valid.tolist() == [True, True, True, False]
     assert torch.count_nonzero(result.means[-1]) == 0
     assert torch.count_nonzero(result.covariances[-1]) == 0
+
+
+def test_native_moments_match_autograd_path(search_device):
+    generator = torch.Generator().manual_seed(4)
+    points = torch.randn(500, 3, generator=generator, dtype=torch.float64)
+    points = points.to(search_device)
+    neighbors = tp.NeighborIndex(points).hybrid(points, 0.4, 16)
+
+    native = tp.covariance_from_neighbors(points, neighbors)
+    with torch.enable_grad():
+        differentiable = tp.covariance_from_neighbors(
+            points.clone().requires_grad_(True), neighbors
+        )
+
+    assert torch.equal(native.counts, differentiable.counts)
+    assert torch.equal(native.valid, differentiable.valid)
+    assert torch.allclose(native.means, differentiable.means.detach())
+    assert torch.allclose(native.covariances, differentiable.covariances.detach())

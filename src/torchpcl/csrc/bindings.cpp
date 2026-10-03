@@ -158,6 +158,38 @@ at::Tensor farthest_point_sample(
   TORCH_CHECK(false, "unsupported points device: ", points.device());
 }
 
+MomentsResult neighbor_moments(
+    const at::Tensor& points, const at::Tensor& indices) {
+  TORCH_CHECK(
+      points.scalar_type() == at::kFloat || points.scalar_type() == at::kDouble,
+      "points must be float32 or float64");
+  TORCH_CHECK(
+      points.dim() == 2 && points.size(1) == 3, "points must have shape (N, 3)");
+  TORCH_CHECK(
+      indices.scalar_type() == at::kLong && indices.dim() == 2,
+      "indices must be an int64 tensor of shape (M, K)");
+  TORCH_CHECK(
+      points.is_contiguous() && indices.is_contiguous(),
+      "neighbor_moments inputs must be contiguous");
+  TORCH_CHECK(
+      points.device() == indices.device(),
+      "neighbor_moments inputs must be on the same device");
+  if (points.device().is_cpu()) {
+    return neighbor_moments_cpu(points, indices);
+  }
+  if (points.is_cuda()) {
+#ifdef TORCHPCL_WITH_CUDA
+    return neighbor_moments_cuda(points, indices);
+#else
+    TORCH_CHECK(
+        false,
+        "torchpcl was built without CUDA support; reinstall with "
+        "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit");
+#endif
+  }
+  TORCH_CHECK(false, "unsupported points device: ", points.device());
+}
+
 FpfhResult fpfh(
     const at::Tensor& points,
     const at::Tensor& normals,
@@ -228,5 +260,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("symmetric_eigh_3x3", &torchpcl::symmetric_eigh_3x3);
   module.def("farthest_point_sample", &torchpcl::farthest_point_sample);
   module.def("fpfh", &torchpcl::fpfh);
+  module.def("neighbor_moments", &torchpcl::neighbor_moments);
   module.def("has_cuda", &torchpcl::has_cuda);
 }

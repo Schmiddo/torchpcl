@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import torch
 
+from ._backend import neighbor_moments as _neighbor_moments
 from .cloud import PointCloudLike, as_point_cloud
 from .neighbors import NeighborIndex, Neighbors
 
@@ -26,6 +27,8 @@ def _moments_from_neighbors(
     neighbors: Neighbors,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return means, centered scatter matrices, and valid-slot counts."""
+    if not (torch.is_grad_enabled() and points.requires_grad):
+        return _neighbor_moments(points, neighbors.indices)
     counts = neighbors.valid.sum(dim=1)
     gathered = points[neighbors.indices.clamp(min=0)]
     weights = neighbors.valid.unsqueeze(-1).to(points.dtype)

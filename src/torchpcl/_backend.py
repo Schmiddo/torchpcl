@@ -56,6 +56,14 @@ def feature_mutual_knn1(
     )
 
 
+def neighbor_moments(
+    points: torch.Tensor, indices: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return neighborhood means, centered scatter matrices and counts."""
+    _check_device(points.device)
+    return _C.neighbor_moments(points.detach().contiguous(), indices.contiguous())
+
+
 def fpfh(
     points: torch.Tensor,
     normals: torch.Tensor,
@@ -134,5 +142,6 @@ __all__ = [
     "feature_knn1",
     "feature_mutual_knn1",
     "fpfh",
+    "neighbor_moments",
     "symmetric_eigh_3x3",
 ]

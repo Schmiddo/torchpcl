@@ -29,6 +29,9 @@ using FpfhResult = std::tuple<at::Tensor, at::Tensor>;
 // target row, each with its squared distance.
 using MutualSearchResult =
     std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>;
+// Per-row neighborhood means (N, 3), centered scatter matrices (N, 3, 3) and
+// neighbor counts (N,).
+using MomentsResult = std::tuple<at::Tensor, at::Tensor, at::Tensor>;
 
 // Every native search (BvhImpl::knn, packed_knn) returns up to k nearest
 // points per query within an inclusive `radius`, as final results: int64
@@ -56,6 +59,8 @@ SearchResult packed_knn_cpu(
 EigenResult symmetric_eigh_3x3_cpu(const at::Tensor& matrices);
 at::Tensor farthest_point_sample_cpu(
     const at::Tensor& points, int64_t num_samples);
+MomentsResult neighbor_moments_cpu(
+    const at::Tensor& points, const at::Tensor& indices);
 FpfhResult fpfh_cpu(
     const at::Tensor& points,
     const at::Tensor& normals,
@@ -77,6 +82,8 @@ SearchResult packed_knn_cuda(
 EigenResult symmetric_eigh_3x3_cuda(const at::Tensor& matrices);
 at::Tensor farthest_point_sample_cuda(
     const at::Tensor& points, int64_t num_samples);
+MomentsResult neighbor_moments_cuda(
+    const at::Tensor& points, const at::Tensor& indices);
 FpfhResult fpfh_cuda(
     const at::Tensor& points,
     const at::Tensor& normals,
@@ -108,6 +115,10 @@ MutualSearchResult feature_mutual_knn1(
 EigenResult symmetric_eigh_3x3(const at::Tensor& matrices);
 at::Tensor farthest_point_sample(
     const at::Tensor& points, int64_t num_samples);
+// Moments of the points named by fixed-width neighborhood rows `indices`
+// (M, K), -1 in empty slots.
+MomentsResult neighbor_moments(
+    const at::Tensor& points, const at::Tensor& indices);
 // Descriptors from a fixed-width self-neighborhood: `indices` (N, K) with -1
 // in empty slots and their squared `distances2`, unit `normals` (zero where
 // `normal_valid` is false). Everything but the masks shares one float dtype.
