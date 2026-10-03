@@ -146,6 +146,38 @@ def _tuple_filter(
     return CorrespondenceSet(source_indices, target_indices, distances2)
 
 
+def _point_normal_equations(
+    points: torch.Tensor,
+    residuals: torch.Tensor,
+    weights: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return J^T W J and J^T W r of point residuals under a small motion.
+
+    Each point's Jacobian is ``[[p]_x^T | I]`` for the pose
+    ``(rx, ry, rz, tx, ty, tz)``, so both products follow from weighted
+    moments of the points instead of one 3x6 Jacobian per point.
+    """
+    weighted_points = weights[:, None] * points
+    x, y, z = weighted_points.sum(dim=0).tolist()
+    second = weighted_points.T @ points
+    weighted_residuals = weights[:, None] * residuals
+    eye = torch.eye(3, dtype=points.dtype)
+    cross = points.new_tensor(((0.0, -z, y), (z, 0.0, -x), (-y, x, 0.0)))
+    jtj = torch.cat(
+        (
+            torch.cat((torch.trace(second) * eye - second, cross), dim=1),
+            torch.cat((cross.T, weights.sum() * eye), dim=1),
+        )
+    )
+    jtr = torch.cat(
+        (
+            torch.linalg.cross(points, weighted_residuals, dim=1).sum(dim=0),
+            weighted_residuals.sum(dim=0),
+        )
+    )
+    return jtj, jtr
+
+
 def _normalized_transform_to_original(
     transform: torch.Tensor,
     source_mean: torch.Tensor,
@@ -217,14 +249,16 @@ def fast_global_registration_from_correspondences(
             source_cloud, target_cloud, options, correspondences.count
         )
 
-    matched_source = centered_source[filtered.source_indices] / scale
-    matched_target = centered_target[filtered.target_indices] / scale
-    transform = torch.eye(4, dtype=source_cloud.dtype, device=source_cloud.device)
-    mu = source_cloud.points.new_tensor(1.0)
-    maximum_distance = source_cloud.points.new_tensor(
+    # The optimization runs on the CPU: it is a loop of small ops, which on
+    # CUDA cost a launch each and a sync per iteration.
+    matched_source = (centered_source[filtered.source_indices] / scale).cpu()
+    matched_target = (centered_target[filtered.target_indices] / scale).cpu()
+    transform = torch.eye(4, dtype=source_cloud.dtype)
+    mu = matched_source.new_tensor(1.0)
+    maximum_distance = matched_source.new_tensor(
         options.max_correspondence_distance
     )
-    minimum_mu = (maximum_distance / scale).square()
+    minimum_mu = (maximum_distance / scale.cpu()).square()
     completed = 0
 
     for iteration in range(options.max_iterations):
@@ -233,23 +267,7 @@ def fast_global_registration_from_correspondences(
         residual2 = residual.square().sum(dim=1)
         weights = (mu / (residual2 + mu)).square()
 
-        x, y, z = current.unbind(dim=1)
-        zeros = torch.zeros_like(x)
-        ones = torch.ones_like(x)
-        jacobian = torch.stack(
-            (
-                torch.stack((zeros, z, -y, ones, zeros, zeros), dim=1),
-                torch.stack((-z, zeros, x, zeros, ones, zeros), dim=1),
-                torch.stack((y, -x, zeros, zeros, zeros, ones), dim=1),
-            ),
-            dim=1,
-        )
-        weighted_jacobian = jacobian * weights[:, None, None]
-        jtj = (jacobian.transpose(1, 2) @ weighted_jacobian).sum(dim=0)
-        jtr = (
-            jacobian.transpose(1, 2)
-            @ (residual * weights[:, None])[:, :, None]
-        ).sum(dim=0)[:, 0]
+        jtj, jtr = _point_normal_equations(current, residual, weights)
         pose, info = torch.linalg.solve_ex(jtj, -jtr)
         if bool(info != 0) or not bool(torch.isfinite(pose).all()):
             return _failed_result(
@@ -268,7 +286,7 @@ def fast_global_registration_from_correspondences(
             mu = torch.maximum(mu / 1.4, minimum_mu)
 
     original_transform = _normalized_transform_to_original(
-        transform, source_mean, target_mean, scale
+        transform.to(source_cloud.device), source_mean, target_mean, scale
     ).unsqueeze(0)
     metrics = evaluate_registration(
         source_cloud,
