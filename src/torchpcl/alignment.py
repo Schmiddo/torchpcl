@@ -40,6 +40,17 @@ class ProcrustesResult:
         return torch.cat([upper, bottom], dim=1)
 
 
+def _batch_rows(values: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+    """Per-batch ``values`` for every packed row, broadcast for one batch."""
+    return values if values.shape[0] == 1 else values[ids]
+
+
+def _determinant_3x3(matrices: torch.Tensor) -> torch.Tensor:
+    """Batched 3x3 determinants as a triple product, cheaper than an LU."""
+    rows = matrices.unbind(dim=1)
+    return (rows[0] * torch.linalg.cross(rows[1], rows[2], dim=1)).sum(dim=1)
+
+
 def _procrustes_packed(
     source: torch.Tensor,
     target: torch.Tensor,
@@ -63,14 +74,17 @@ def _procrustes_packed(
     target_mean = segment_sum(target * weights[:, None], offsets)
     target_mean = target_mean / safe_weight_sum[:, None]
 
-    centered_source = source - source_mean[ids]
-    centered_target = target - target_mean[ids]
-    covariance = centered_source[:, :, None] * centered_target[:, None, :]
-    covariance = segment_sum(covariance * weights[:, None, None], offsets)
+    centered_source = source - _batch_rows(source_mean, ids)
+    centered_target = target - _batch_rows(target_mean, ids)
+    if batch_size == 1:
+        covariance = ((centered_source * weights[:, None]).T @ centered_target)[None]
+    else:
+        covariance = centered_source[:, :, None] * centered_target[:, None, :]
+        covariance = segment_sum(covariance * weights[:, None, None], offsets)
 
     u, singular_values, vh = torch.linalg.svd(covariance)
     v = vh.transpose(1, 2)
-    determinant = torch.linalg.det(v @ u.transpose(1, 2))
+    determinant = _determinant_3x3(v @ u.transpose(1, 2))
     diagonal = torch.stack(
         [torch.ones_like(determinant), torch.ones_like(determinant), determinant],
         dim=1,

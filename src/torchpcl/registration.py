@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import torch
 
 from ._segments import segment_sum
-from .alignment import _procrustes_packed
+from .alignment import _batch_rows, _procrustes_packed
 from .cloud import PointCloud, PointCloudLike, _normalize_cloud, batch_ids
 from .neighbors import NeighborIndex
 from .transforms import transform
@@ -334,7 +334,7 @@ def _robust_weights(
     ids: torch.Tensor,
     robust_loss: RobustLoss | None,
 ) -> torch.Tensor:
-    weights = (valid & active[ids]).to(residual_magnitude.dtype)
+    weights = (valid & _batch_rows(active, ids)).to(residual_magnitude.dtype)
     if robust_loss is not None:
         weights = weights * _kernel_weight(residual_magnitude, robust_loss)
     return weights
