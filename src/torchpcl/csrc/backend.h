@@ -23,6 +23,8 @@ constexpr int kCudaBvhLeafSize = 2;
 
 using SearchResult = std::tuple<at::Tensor, at::Tensor>;
 using EigenResult = std::tuple<at::Tensor, at::Tensor>;
+// FPFH descriptors (N, 33) and their validity (N,).
+using FpfhResult = std::tuple<at::Tensor, at::Tensor>;
 // Nearest target row of every source row and nearest source row of every
 // target row, each with its squared distance.
 using MutualSearchResult =
@@ -54,6 +56,12 @@ SearchResult packed_knn_cpu(
 EigenResult symmetric_eigh_3x3_cpu(const at::Tensor& matrices);
 at::Tensor farthest_point_sample_cpu(
     const at::Tensor& points, int64_t num_samples);
+FpfhResult fpfh_cpu(
+    const at::Tensor& points,
+    const at::Tensor& normals,
+    const at::Tensor& normal_valid,
+    const at::Tensor& indices,
+    const at::Tensor& distances2);
 
 #ifdef TORCHPCL_WITH_CUDA
 std::shared_ptr<BvhImpl> make_cuda_bvh(const at::Tensor& points);
@@ -69,6 +77,12 @@ SearchResult packed_knn_cuda(
 EigenResult symmetric_eigh_3x3_cuda(const at::Tensor& matrices);
 at::Tensor farthest_point_sample_cuda(
     const at::Tensor& points, int64_t num_samples);
+FpfhResult fpfh_cuda(
+    const at::Tensor& points,
+    const at::Tensor& normals,
+    const at::Tensor& normal_valid,
+    const at::Tensor& indices,
+    const at::Tensor& distances2);
 #endif
 
 class BvhIndex {
@@ -94,6 +108,15 @@ MutualSearchResult feature_mutual_knn1(
 EigenResult symmetric_eigh_3x3(const at::Tensor& matrices);
 at::Tensor farthest_point_sample(
     const at::Tensor& points, int64_t num_samples);
+// Descriptors from a fixed-width self-neighborhood: `indices` (N, K) with -1
+// in empty slots and their squared `distances2`, unit `normals` (zero where
+// `normal_valid` is false). Everything but the masks shares one float dtype.
+FpfhResult fpfh(
+    const at::Tensor& points,
+    const at::Tensor& normals,
+    const at::Tensor& normal_valid,
+    const at::Tensor& indices,
+    const at::Tensor& distances2);
 
 bool has_cuda();
 

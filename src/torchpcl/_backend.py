@@ -56,6 +56,24 @@ def feature_mutual_knn1(
     )
 
 
+def fpfh(
+    points: torch.Tensor,
+    normals: torch.Tensor,
+    normal_valid: torch.Tensor,
+    indices: torch.Tensor,
+    distances2: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return FPFH descriptors and validity from a self-neighborhood."""
+    _check_device(points.device)
+    return _C.fpfh(
+        points.detach().contiguous(),
+        normals.detach().contiguous(),
+        normal_valid.contiguous(),
+        indices.contiguous(),
+        distances2.detach().contiguous(),
+    )
+
+
 # Both backends return up to k nearest points within an inclusive radius, as
 # int64 indices and exact float32 squared distances, with -1 and inf in empty
 # slots (see csrc/backend.h).
@@ -115,5 +133,6 @@ __all__ = [
     "farthest_point_sample",
     "feature_knn1",
     "feature_mutual_knn1",
+    "fpfh",
     "symmetric_eigh_3x3",
 ]

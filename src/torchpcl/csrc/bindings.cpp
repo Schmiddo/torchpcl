@@ -158,6 +158,56 @@ at::Tensor farthest_point_sample(
   TORCH_CHECK(false, "unsupported points device: ", points.device());
 }
 
+FpfhResult fpfh(
+    const at::Tensor& points,
+    const at::Tensor& normals,
+    const at::Tensor& normal_valid,
+    const at::Tensor& indices,
+    const at::Tensor& distances2) {
+  TORCH_CHECK(
+      points.scalar_type() == at::kFloat || points.scalar_type() == at::kDouble,
+      "points must be float32 or float64");
+  TORCH_CHECK(
+      points.dim() == 2 && points.size(1) == 3, "points must have shape (N, 3)");
+  const int64_t count = points.size(0);
+  TORCH_CHECK(
+      normals.sizes() == points.sizes() &&
+          normals.scalar_type() == points.scalar_type(),
+      "normals must match points");
+  TORCH_CHECK(
+      normal_valid.scalar_type() == at::kBool && normal_valid.dim() == 1 &&
+          normal_valid.size(0) == count,
+      "normal_valid must be a bool tensor of shape (N,)");
+  TORCH_CHECK(
+      indices.scalar_type() == at::kLong && indices.dim() == 2 &&
+          indices.size(0) == count,
+      "indices must be an int64 tensor of shape (N, K)");
+  TORCH_CHECK(
+      distances2.sizes() == indices.sizes() &&
+          distances2.scalar_type() == points.scalar_type(),
+      "distances2 must match indices in shape and points in dtype");
+  for (const auto* tensor : {&points, &normals, &normal_valid, &indices, &distances2}) {
+    TORCH_CHECK(tensor->is_contiguous(), "fpfh inputs must be contiguous");
+    TORCH_CHECK(
+        tensor->device() == points.device(),
+        "fpfh inputs must be on the same device");
+  }
+  if (points.device().is_cpu()) {
+    return fpfh_cpu(points, normals, normal_valid, indices, distances2);
+  }
+  if (points.is_cuda()) {
+#ifdef TORCHPCL_WITH_CUDA
+    return fpfh_cuda(points, normals, normal_valid, indices, distances2);
+#else
+    TORCH_CHECK(
+        false,
+        "torchpcl was built without CUDA support; reinstall with "
+        "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit");
+#endif
+  }
+  TORCH_CHECK(false, "unsupported points device: ", points.device());
+}
+
 bool has_cuda() {
 #ifdef TORCHPCL_WITH_CUDA
   return true;
@@ -177,5 +227,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("feature_mutual_knn1", &torchpcl::feature_mutual_knn1);
   module.def("symmetric_eigh_3x3", &torchpcl::symmetric_eigh_3x3);
   module.def("farthest_point_sample", &torchpcl::farthest_point_sample);
+  module.def("fpfh", &torchpcl::fpfh);
   module.def("has_cuda", &torchpcl::has_cuda);
 }
