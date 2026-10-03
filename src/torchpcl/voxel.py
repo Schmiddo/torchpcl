@@ -103,37 +103,36 @@ def voxelize(
         column_order = point_coordinates[order, column].argsort(stable=True)
         order = order[column_order]
     sorted_coordinates = point_coordinates[order]
-    starts = torch.ones(
-        sorted_coordinates.shape[0], dtype=torch.bool, device=packed.device
-    )
-    if sorted_coordinates.shape[0] > 1:
+    point_count = sorted_coordinates.shape[0]
+    starts = torch.ones(point_count, dtype=torch.bool, device=packed.device)
+    if point_count > 1:
         starts[1:] = torch.any(
             sorted_coordinates[1:] != sorted_coordinates[:-1], dim=1
         )
+    start_rows = starts.nonzero()[:, 0]
     sorted_voxel_ids = starts.cumsum(0) - 1
     inverse = torch.empty_like(sorted_voxel_ids)
     inverse[order] = sorted_voxel_ids
-    coordinates = sorted_coordinates[starts]
-    counts = torch.bincount(sorted_voxel_ids, minlength=coordinates.shape[0])
+    coordinates = sorted_coordinates[start_rows]
+    counts = torch.diff(start_rows, append=start_rows.new_tensor([point_count]))
 
-    voxel_count = coordinates.shape[0]
-    sums = packed.points.new_zeros((voxel_count, 3))
-    sums.index_add_(0, inverse, packed.points)
-    centroids = sums / counts.to(packed.dtype)[:, None]
-
-    if voxel_count:
-        per_batch = torch.bincount(
-            coordinates[:, 0], minlength=packed.batch_size
+    # Each voxel's points are contiguous in sorted order, so the centroids
+    # are segment sums: deterministic on CUDA, unlike an atomic scatter-add,
+    # and faster on the CPU, where scatter-add runs on one thread.
+    if point_count:
+        sums = torch.segment_reduce(
+            packed.points[order], "sum", lengths=counts, axis=0
         )
     else:
-        per_batch = torch.zeros(
-            packed.batch_size, dtype=torch.int64, device=packed.device
-        )
-    offsets = torch.cat(
-        [
-            torch.zeros(1, dtype=torch.int64, device=packed.device),
-            per_batch.cumsum(0),
-        ]
+        sums = packed.points.new_zeros((0, 3))
+    centroids = sums / counts.to(packed.dtype)[:, None]
+
+    # Voxels are sorted by batch first, so each batch's are contiguous.
+    offsets = torch.searchsorted(
+        coordinates[:, 0].contiguous(),
+        torch.arange(
+            packed.batch_size + 1, dtype=torch.int32, device=packed.device
+        ),
     )
     voxel_cloud = PointCloud._from_validated(centroids, offsets)
     return Voxelization(
