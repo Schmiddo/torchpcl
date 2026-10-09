@@ -13,8 +13,23 @@
 #include <cstdint>
 #include <limits>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace torchpcl {
 namespace {
+
+// Whether this thread already runs inside an OpenMP parallel region, where a
+// nested one would oversubscribe. torch's libgomp is the one loaded (same
+// soname), so this sees at::parallel_for's regions too.
+bool in_parallel_region() {
+#ifdef _OPENMP
+  return omp_in_parallel();
+#else
+  return false;
+#endif
+}
 
 // Subtrees larger than this are built as separate OpenMP tasks.
 constexpr uint32_t kTaskPoints = 32768;
@@ -110,7 +125,7 @@ BvhResult build_bvh_cpu(const at::Tensor& points) {
       point_data, ids,
       reinterpret_cast<cuBQL::bvh3f::Node*>(nodes.data_ptr<uint8_t>()),
       kCpuBvhLeafSize);
-  if (kept <= kTaskPoints || at::in_parallel_region()) {
+  if (kept <= kTaskPoints || in_parallel_region()) {
     builder.build(0, 0, kept);
   } else {
 #pragma omp parallel num_threads(at::get_num_threads())

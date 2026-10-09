@@ -124,10 +124,12 @@ __global__ void reduce_block_candidates_kernel(
 int grid_blocks(int64_t count) {
   const int64_t per_block = kBlockThreads * kItemsPerThread;
   const int64_t needed = (count + per_block - 1) / per_block;
-  const int64_t saturating =
-      static_cast<int64_t>(at::cuda::getCurrentDeviceProperties()
-                               ->multiProcessorCount) *
-      kBlocksPerSm;
+  int device = 0;
+  int multiprocessors = 0;
+  C10_CUDA_CHECK(cudaGetDevice(&device));
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+      &multiprocessors, cudaDevAttrMultiProcessorCount, device));
+  const int64_t saturating = int64_t{multiprocessors} * kBlocksPerSm;
   return static_cast<int>(std::max<int64_t>(1, std::min(needed, saturating)));
 }
 

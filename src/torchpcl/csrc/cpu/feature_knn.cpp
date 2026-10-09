@@ -152,9 +152,10 @@ TORCHPCL_TARGET_CLONES void nearest_rows(
 }
 
 // Nearest reference row of every query, and with `reverse_indices` also the
-// nearest query row of every reference, from the same distances: each thread
-// keeps its own reference minima, merged in thread order afterwards. Threads
-// cover increasing query ranges, so ties keep the lower index both ways.
+// nearest query row of every reference, from the same distances. The query
+// groups are split into one contiguous run per thread; each run keeps its own
+// reference minima, merged in run order afterwards. Runs cover increasing
+// query ranges, so ties keep the lower index both ways.
 void nearest_cpu(
     const at::Tensor& reference,
     const at::Tensor& queries,
@@ -173,25 +174,29 @@ void nearest_cpu(
     auto* distance_data = distances2.data_ptr<scalar_t>();
     const int64_t groups = (query_count + kQueries - 1) / kQueries;
     const bool reverse = reverse_indices != nullptr;
-    const int64_t threads = reverse ? at::get_num_threads() : 0;
+    const int64_t runs = std::min<int64_t>(at::get_num_threads(), groups);
+    const int64_t buffers = reverse ? runs : 0;
     std::vector<scalar_t> column_best(
-        threads * reference_count, std::numeric_limits<scalar_t>::infinity());
-    std::vector<int64_t> column_index(threads * reference_count, -1);
-    at::parallel_for(0, groups, 1, [&](int64_t begin, int64_t end) {
-      const int64_t offset = reverse ? at::get_thread_num() * reference_count : 0;
-      for (int64_t group = begin; group < end; ++group) {
-        const int64_t first = group * kQueries;
-        nearest_rows(
-            packed.data(),
-            reference_count,
-            query_data + first * dimension,
-            first,
-            std::min(kQueries, query_count - first),
-            dimension,
-            index_data + first,
-            distance_data + first,
-            reverse ? column_best.data() + offset : nullptr,
-            reverse ? column_index.data() + offset : nullptr);
+        buffers * reference_count, std::numeric_limits<scalar_t>::infinity());
+    std::vector<int64_t> column_index(buffers * reference_count, -1);
+    at::parallel_for(0, runs, 1, [&](int64_t begin, int64_t end) {
+      for (int64_t run = begin; run < end; ++run) {
+        const int64_t offset = run * reference_count;
+        const int64_t last = groups * (run + 1) / runs;
+        for (int64_t group = groups * run / runs; group < last; ++group) {
+          const int64_t first = group * kQueries;
+          nearest_rows(
+              packed.data(),
+              reference_count,
+              query_data + first * dimension,
+              first,
+              std::min(kQueries, query_count - first),
+              dimension,
+              index_data + first,
+              distance_data + first,
+              reverse ? column_best.data() + offset : nullptr,
+              reverse ? column_index.data() + offset : nullptr);
+        }
       }
     });
     if (!reverse) return;
@@ -201,9 +206,9 @@ void nearest_cpu(
       for (int64_t row = begin; row < end; ++row) {
         scalar_t best = std::numeric_limits<scalar_t>::infinity();
         int64_t best_index = -1;
-        for (int64_t thread = 0; thread < threads; ++thread) {
-          const scalar_t candidate = column_best[thread * reference_count + row];
-          const int64_t index = column_index[thread * reference_count + row];
+        for (int64_t run = 0; run < runs; ++run) {
+          const scalar_t candidate = column_best[run * reference_count + row];
+          const int64_t index = column_index[run * reference_count + row];
           if (index >= 0 &&
               (candidate < best || (candidate == best && index < best_index))) {
             best = candidate;
