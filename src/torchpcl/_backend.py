@@ -91,7 +91,8 @@ class BvhBackend:
     def __init__(self, reference: PointCloud) -> None:
         _check_device(reference.device)
         self._points = reference.points.detach().to(torch.float32).contiguous()
-        self._index = None if self._points.shape[0] == 0 else _C.BvhIndex(self._points)
+        # (nodes, prim_ids), on the points' device (see csrc/backend.h).
+        self._bvh = None if self._points.shape[0] == 0 else _C.build_bvh(self._points)
 
     def knn(
         self,
@@ -100,7 +101,7 @@ class BvhBackend:
         radius: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         query_points = queries.points.detach().to(torch.float32).contiguous()
-        if self._index is None:
+        if self._bvh is None:
             shape = (query_points.shape[0], k)
             return (
                 torch.full(shape, -1, dtype=torch.int64, device=query_points.device),
@@ -108,7 +109,7 @@ class BvhBackend:
                     shape, torch.inf, dtype=torch.float32, device=query_points.device
                 ),
             )
-        return self._index.knn(query_points, k, radius)
+        return _C.bvh_knn(*self._bvh, self._points, query_points, k, radius)
 
 
 class PackedBackend:

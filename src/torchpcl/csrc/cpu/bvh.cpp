@@ -1,21 +1,17 @@
 #include "backend.h"
-#include "common/checks.h"
+#include "common/bvh.h"
 #include "common/distance.h"
 
-#include "cuBQL/bvh.h"
 #include "cuBQL/queries/pointData/findClosest.h"
 #include "cuBQL/queries/pointData/knn.h"
 
 #include <ATen/Parallel.h>
 #include <ATen/ops/empty.h>
-#include <c10/util/Exception.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <vector>
 
 namespace torchpcl {
 namespace {
@@ -87,23 +83,33 @@ class Builder {
   std::atomic<uint64_t> next_{1};
 };
 
-cuBQL::bvh3f build_bvh(const cuBQL::vec3f* points, uint32_t count) {
+}  // namespace
+
+BvhResult build_bvh_cpu(const at::Tensor& points) {
+  const auto* point_data =
+      reinterpret_cast<const cuBQL::vec3f*>(points.data_ptr<float>());
+  const auto count = static_cast<uint32_t>(points.size(0));
   // Like cuBQL's builder, leave out points whose box is empty (NaN).
-  std::vector<uint32_t> ids;
-  ids.reserve(count);
+  auto prim_ids = at::empty({count}, points.options().dtype(at::kInt));
+  auto* ids = reinterpret_cast<uint32_t*>(prim_ids.data_ptr<int32_t>());
+  uint32_t kept = 0;
   for (uint32_t i = 0; i < count; ++i) {
-    if (!cuBQL::box3f().including(points[i]).empty()) ids.push_back(i);
+    if (!cuBQL::box3f().including(point_data[i]).empty()) ids[kept++] = i;
   }
-  const auto kept = static_cast<uint32_t>(ids.size());
-  cuBQL::bvh3f bvh{};
   // cuBQL reads a node with no points as an inner node, so a tree over no
-  // points cannot be traversed; `knn` answers that case without one.
-  if (kept == 0) return bvh;
+  // points cannot be traversed; `bvh_knn_cpu` answers that case without one.
+  if (kept == 0) {
+    return {at::empty({0, kBvhNodeBytes}, points.options().dtype(at::kByte)),
+            prim_ids.narrow(0, 0, 0)};
+  }
 
   // A binary tree over n points has at most 2n - 1 nodes.
-  std::unique_ptr<cuBQL::bvh3f::Node[]> nodes(
-      new cuBQL::bvh3f::Node[2 * uint64_t{kept} - 1]);
-  Builder builder(points, ids.data(), nodes.get(), kCpuBvhLeafSize);
+  auto nodes = at::empty(
+      {2 * int64_t{kept} - 1, kBvhNodeBytes}, points.options().dtype(at::kByte));
+  Builder builder(
+      point_data, ids,
+      reinterpret_cast<cuBQL::bvh3f::Node*>(nodes.data_ptr<uint8_t>()),
+      kCpuBvhLeafSize);
   if (kept <= kTaskPoints || at::in_parallel_region()) {
     builder.build(0, 0, kept);
   } else {
@@ -113,101 +119,75 @@ cuBQL::bvh3f build_bvh(const cuBQL::vec3f* points, uint32_t count) {
   }
 
   // Shrink to the nodes actually used.
-  bvh.numNodes = static_cast<uint32_t>(builder.node_count());
-  bvh.nodes = new cuBQL::bvh3f::Node[bvh.numNodes];
-  std::copy(nodes.get(), nodes.get() + bvh.numNodes, bvh.nodes);
-  bvh.numPrims = kept;
-  bvh.primIDs = new uint32_t[kept];
-  std::copy(ids.begin(), ids.end(), bvh.primIDs);
-  return bvh;
+  const auto used = static_cast<int64_t>(builder.node_count());
+  return {nodes.narrow(0, 0, used).clone(), prim_ids.narrow(0, 0, kept)};
 }
 
-class CpuBvh final : public BvhImpl {
- public:
-  explicit CpuBvh(const at::Tensor& points) : points_(points) {
-    TORCH_CHECK(points_.device().is_cpu(), "points must be a CPU tensor");
-    bvh_ = build_bvh(
-        reinterpret_cast<const cuBQL::vec3f*>(points_.data_ptr<float>()),
-        static_cast<uint32_t>(points_.size(0)));
+SearchResult bvh_knn_cpu(
+    const at::Tensor& nodes,
+    const at::Tensor& prim_ids,
+    const at::Tensor& points,
+    const at::Tensor& queries,
+    int64_t k,
+    double radius) {
+  const auto count = queries.size(0);
+  auto indices = at::empty({count, k}, queries.options().dtype(at::kLong));
+  auto distances = at::empty({count, k}, queries.options());
+  if (prim_ids.numel() == 0) {  // every reference point was NaN
+    indices.fill_(-1);
+    distances.fill_(std::numeric_limits<float>::infinity());
+    return {indices, distances};
   }
+  const cuBQL::bvh3f bvh = bvh_view(nodes, prim_ids);
+  const float bound2 = inclusive_bound2(radius);
+  const float cull2 = cull_bound2(bound2);
+  const auto* point_data =
+      reinterpret_cast<const cuBQL::vec3f*>(points.data_ptr<float>());
+  const auto* query_data =
+      reinterpret_cast<const cuBQL::vec3f*>(queries.data_ptr<float>());
+  auto* output_indices = indices.data_ptr<int64_t>();
+  auto* output_distances = distances.data_ptr<float>();
+  // One output slot: the candidate and its exact distance, or empty.
+  const auto write = [&](int64_t slot, int index, cuBQL::vec3f query) {
+    const float distance2 = index >= 0
+        ? exact_distance2(point_data[index], query)
+        : std::numeric_limits<float>::infinity();
+    const bool kept = index >= 0 && distance2 <= bound2;
+    output_indices[slot] = kept ? index : -1;
+    output_distances[slot] =
+        kept ? distance2 : std::numeric_limits<float>::infinity();
+  };
 
-  ~CpuBvh() override {
-    delete[] bvh_.nodes;
-    delete[] bvh_.primIDs;
-  }
-
-  SearchResult knn(
-      const at::Tensor& queries, int64_t k, double radius) override {
-    check_points(queries, "queries");
-    TORCH_CHECK(queries.device().is_cpu(), "queries must be a CPU tensor");
-    const auto count = queries.size(0);
-    auto indices = at::empty({count, k}, queries.options().dtype(at::kLong));
-    auto distances = at::empty({count, k}, queries.options());
-    if (bvh_.numPrims == 0) {  // every reference point was NaN
-      indices.fill_(-1);
-      distances.fill_(std::numeric_limits<float>::infinity());
-      return {indices, distances};
-    }
-    const float bound2 = inclusive_bound2(radius);
-    const float cull2 = cull_bound2(bound2);
-    const auto* points = reinterpret_cast<const cuBQL::vec3f*>(
-        points_.data_ptr<float>());
-    const auto* query_data = reinterpret_cast<const cuBQL::vec3f*>(
-        queries.data_ptr<float>());
-    auto* output_indices = indices.data_ptr<int64_t>();
-    auto* output_distances = distances.data_ptr<float>();
-    // One output slot: the candidate and its exact distance, or empty.
-    const auto write = [&](int64_t slot, int index, cuBQL::vec3f query) {
-      const float distance2 = index >= 0
-          ? exact_distance2(points[index], query)
-          : std::numeric_limits<float>::infinity();
-      const bool kept = index >= 0 && distance2 <= bound2;
-      output_indices[slot] = kept ? index : -1;
-      output_distances[slot] =
-          kept ? distance2 : std::numeric_limits<float>::infinity();
-    };
-
-    if (k == 1) {
-      at::parallel_for(0, count, 512, [&](int64_t begin, int64_t end) {
-        for (int64_t query = begin; query < end; ++query) {
-          write(query,
-                cuBQL::points::findClosest(
-                    bvh_, points, query_data[query], cull2),
-                query_data[query]);
-        }
-      });
-      return {indices, distances};
-    }
-
-    at::parallel_for(0, count, 128, [&](int64_t begin, int64_t end) {
-      cuBQL::knn::Candidate candidates[kMaxK];
+  if (k == 1) {
+    at::parallel_for(0, count, 512, [&](int64_t begin, int64_t end) {
       for (int64_t query = begin; query < end; ++query) {
-        const auto result = cuBQL::points::findKNN(
-            candidates,
-            static_cast<int>(k),
-            bvh_,
-            points,
-            query_data[query],
-            cull2);
-        for (int64_t rank = 0; rank < k; ++rank) {
-          write(query * k + rank,
-                rank < result.numFound ? candidates[rank].primID : -1,
-                query_data[query]);
-        }
+        write(query,
+              cuBQL::points::findClosest(
+                  bvh, point_data, query_data[query], cull2),
+              query_data[query]);
       }
     });
     return {indices, distances};
   }
 
- private:
-  at::Tensor points_;
-  cuBQL::bvh3f bvh_{};
-};
-
-}  // namespace
-
-std::shared_ptr<BvhImpl> make_cpu_bvh(const at::Tensor& points) {
-  return std::make_shared<CpuBvh>(points);
+  at::parallel_for(0, count, 128, [&](int64_t begin, int64_t end) {
+    cuBQL::knn::Candidate candidates[kMaxK];
+    for (int64_t query = begin; query < end; ++query) {
+      const auto result = cuBQL::points::findKNN(
+          candidates,
+          static_cast<int>(k),
+          bvh,
+          point_data,
+          query_data[query],
+          cull2);
+      for (int64_t rank = 0; rank < k; ++rank) {
+        write(query * k + rank,
+              rank < result.numFound ? candidates[rank].primID : -1,
+              query_data[query]);
+      }
+    }
+  });
+  return {indices, distances};
 }
 
 }  // namespace torchpcl

@@ -44,6 +44,28 @@ inline void check_knn_args(int64_t k, double radius) {
   TORCH_CHECK(radius > 0.0 && !std::isnan(radius), "radius must be positive");
 }
 
+// The tensors `build_bvh` made of `points` (see BvhResult), and queries on
+// their device.
+inline void check_bvh(
+    const at::Tensor& nodes,
+    const at::Tensor& prim_ids,
+    const at::Tensor& points,
+    const at::Tensor& queries) {
+  TORCH_CHECK(
+      nodes.scalar_type() == at::kByte && nodes.dim() == 2 &&
+          nodes.size(1) == kBvhNodeBytes && nodes.is_contiguous(),
+      "nodes must be a contiguous uint8 tensor of shape (M, ", kBvhNodeBytes, ")");
+  TORCH_CHECK(
+      prim_ids.scalar_type() == at::kInt && prim_ids.dim() == 1 &&
+          prim_ids.is_contiguous(),
+      "prim_ids must be a contiguous int32 tensor of shape (P,)");
+  TORCH_CHECK(
+      nodes.device() == points.device() &&
+          prim_ids.device() == points.device() &&
+          queries.device() == points.device(),
+      "queries and the BVH must be on the device of the indexed points");
+}
+
 inline void check_packed_metadata(
     const at::Tensor& points,
     const at::Tensor& point_offsets,

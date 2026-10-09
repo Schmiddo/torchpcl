@@ -3,12 +3,13 @@
 #include <ATen/core/Tensor.h>
 
 #include <cstdint>
-#include <memory>
 #include <tuple>
 
 namespace torchpcl {
 
 constexpr int64_t kMaxK = 64;
+// sizeof(cuBQL::bvh3f::Node), asserted in common/bvh.h.
+constexpr int64_t kBvhNodeBytes = 32;
 // Points per BVH leaf. cuBQL's default gives every point a leaf of its own,
 // 2N-1 nodes for N points. Larger leaves mean fewer nodes to build and walk,
 // but a fixed-radius query then tests more points outside its radius.
@@ -22,6 +23,11 @@ constexpr int kCpuBvhLeafSize = 8;
 constexpr int kCudaBvhLeafSize = 2;
 
 using SearchResult = std::tuple<at::Tensor, at::Tensor>;
+// A BVH over N points as two tensors on the points' device: `nodes`
+// (num_nodes, kBvhNodeBytes) uint8 in cuBQL's BinaryBVH node layout, and
+// `prim_ids` (num_prims,) int32, the point rows the leaves name. Points with
+// a NaN coordinate are left out, so num_prims may be less than N.
+using BvhResult = std::tuple<at::Tensor, at::Tensor>;
 using EigenResult = std::tuple<at::Tensor, at::Tensor>;
 // FPFH descriptors (N, 33) and their validity (N,).
 using FpfhResult = std::tuple<at::Tensor, at::Tensor>;
@@ -33,18 +39,19 @@ using MutualSearchResult =
 // neighbor counts (N,).
 using MomentsResult = std::tuple<at::Tensor, at::Tensor, at::Tensor>;
 
-// Every native search (BvhImpl::knn, packed_knn) returns up to k nearest
-// points per query within an inclusive `radius`, as final results: int64
-// indices and float32 squared distances from exact_distance2
-// (common/distance.h), with -1 and +inf in empty slots.
-class BvhImpl {
- public:
-  virtual ~BvhImpl() = default;
-  virtual SearchResult knn(
-      const at::Tensor& queries, int64_t k, double radius) = 0;
-};
+// Every native search (bvh_knn, packed_knn) returns up to k nearest points
+// per query within an inclusive `radius`, as final results: int64 indices
+// and float32 squared distances from exact_distance2 (common/distance.h),
+// with -1 and +inf in empty slots.
 
-std::shared_ptr<BvhImpl> make_cpu_bvh(const at::Tensor& points);
+BvhResult build_bvh_cpu(const at::Tensor& points);
+SearchResult bvh_knn_cpu(
+    const at::Tensor& nodes,
+    const at::Tensor& prim_ids,
+    const at::Tensor& points,
+    const at::Tensor& queries,
+    int64_t k,
+    double radius);
 SearchResult feature_knn1_cpu(
     const at::Tensor& reference, const at::Tensor& queries);
 MutualSearchResult feature_mutual_knn1_cpu(
@@ -69,7 +76,14 @@ FpfhResult fpfh_cpu(
     const at::Tensor& distances2);
 
 #ifdef TORCHPCL_WITH_CUDA
-std::shared_ptr<BvhImpl> make_cuda_bvh(const at::Tensor& points);
+BvhResult build_bvh_cuda(const at::Tensor& points);
+SearchResult bvh_knn_cuda(
+    const at::Tensor& nodes,
+    const at::Tensor& prim_ids,
+    const at::Tensor& points,
+    const at::Tensor& queries,
+    int64_t k,
+    double radius);
 SearchResult feature_knn1_cuda(
     const at::Tensor& reference, const at::Tensor& queries);
 SearchResult packed_knn_cuda(
@@ -92,14 +106,15 @@ FpfhResult fpfh_cuda(
     const at::Tensor& distances2);
 #endif
 
-class BvhIndex {
- public:
-  explicit BvhIndex(const at::Tensor& points);
-  SearchResult knn(const at::Tensor& queries, int64_t k, double radius);
-
- private:
-  std::shared_ptr<BvhImpl> impl_;
-};
+BvhResult build_bvh(const at::Tensor& points);
+// Search the BVH `build_bvh` made of `points` (see BvhResult).
+SearchResult bvh_knn(
+    const at::Tensor& nodes,
+    const at::Tensor& prim_ids,
+    const at::Tensor& points,
+    const at::Tensor& queries,
+    int64_t k,
+    double radius);
 
 SearchResult packed_knn(
     const at::Tensor& points,

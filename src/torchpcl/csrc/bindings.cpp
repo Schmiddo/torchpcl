@@ -5,18 +5,16 @@
 
 namespace torchpcl {
 
-BvhIndex::BvhIndex(const at::Tensor& points) {
+BvhResult build_bvh(const at::Tensor& points) {
   check_points(points, "points");
   TORCH_CHECK(points.size(0) > 0, "points must be non-empty");
   TORCH_CHECK(points.size(0) <= INT32_MAX, "points has too many rows");
   if (points.device().is_cpu()) {
-    impl_ = make_cpu_bvh(points);
-    return;
+    return build_bvh_cpu(points);
   }
   if (points.is_cuda()) {
 #ifdef TORCHPCL_WITH_CUDA
-    impl_ = make_cuda_bvh(points);
-    return;
+    return build_bvh_cuda(points);
 #else
     TORCH_CHECK(
         false,
@@ -27,10 +25,31 @@ BvhIndex::BvhIndex(const at::Tensor& points) {
   TORCH_CHECK(false, "unsupported points device: ", points.device());
 }
 
-SearchResult BvhIndex::knn(
-    const at::Tensor& queries, int64_t k, double radius) {
+SearchResult bvh_knn(
+    const at::Tensor& nodes,
+    const at::Tensor& prim_ids,
+    const at::Tensor& points,
+    const at::Tensor& queries,
+    int64_t k,
+    double radius) {
+  check_points(points, "points");
+  check_points(queries, "queries");
   check_knn_args(k, radius);
-  return impl_->knn(queries, k, radius);
+  check_bvh(nodes, prim_ids, points, queries);
+  if (points.device().is_cpu()) {
+    return bvh_knn_cpu(nodes, prim_ids, points, queries, k, radius);
+  }
+  if (points.is_cuda()) {
+#ifdef TORCHPCL_WITH_CUDA
+    return bvh_knn_cuda(nodes, prim_ids, points, queries, k, radius);
+#else
+    TORCH_CHECK(
+        false,
+        "torchpcl was built without CUDA support; reinstall with "
+        "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit");
+#endif
+  }
+  TORCH_CHECK(false, "unsupported points device: ", points.device());
 }
 
 SearchResult packed_knn(
@@ -251,9 +270,8 @@ bool has_cuda() {
 }  // namespace torchpcl
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
-  py::class_<torchpcl::BvhIndex>(module, "BvhIndex")
-      .def(py::init<const at::Tensor&>())
-      .def("knn", &torchpcl::BvhIndex::knn);
+  module.def("build_bvh", &torchpcl::build_bvh);
+  module.def("bvh_knn", &torchpcl::bvh_knn);
   module.def("packed_knn", &torchpcl::packed_knn);
   module.def("feature_knn1", &torchpcl::feature_knn1);
   module.def("feature_mutual_knn1", &torchpcl::feature_mutual_knn1);

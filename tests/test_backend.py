@@ -13,12 +13,16 @@ def _selected_distances(points, queries, indices):
     return distances.masked_fill(~valid, torch.inf).sort(dim=1).values
 
 
+def _bvh_knn(points, queries, k, radius):
+    return _C.bvh_knn(*_C.build_bvh(points), points, queries, k, radius)
+
+
 def test_bvh_knn_selects_reference_topk(search_device):
     generator = torch.Generator(device="cpu").manual_seed(7)
     points = torch.rand(37, 3, generator=generator).to(search_device)
     queries = torch.rand(9, 3, generator=generator).to(search_device)
 
-    indices, distances = _C.BvhIndex(points).knn(queries, 5, math.inf)
+    indices, distances = _bvh_knn(points, queries, 5, math.inf)
     expected = torch.cdist(queries, points).square().topk(
         5, dim=1, largest=False
     ).values
@@ -71,29 +75,39 @@ def test_packed_knn_empty_reference_batch_is_invalid(search_device):
 
 def test_native_radius_boundary_and_empty_queries(search_device):
     points = torch.zeros(1, 3, device=search_device)
-    index = _C.BvhIndex(points)
+    bvh = _C.build_bvh(points)
     queries = torch.tensor(
         [[0.0999, 0.0, 0.0], [0.1001, 0.0, 0.0]], device=search_device
     )
 
-    indices, _ = index.knn(queries, 1, 0.1)
-    empty_indices, empty_distances = index.knn(
-        torch.empty(0, 3, device=search_device), 3, 1.0
+    indices, _ = _C.bvh_knn(*bvh, points, queries, 1, 0.1)
+    empty_indices, empty_distances = _C.bvh_knn(
+        *bvh, points, torch.empty(0, 3, device=search_device), 3, 1.0
     )
 
     assert indices[:, 0].tolist() == [0, -1]
     assert empty_indices.shape == empty_distances.shape == (0, 3)
 
 
+def test_all_nan_reference_has_no_neighbors(search_device):
+    points = torch.full((20, 3), torch.nan, device=search_device)
+    queries = torch.rand(4, 3, device=search_device)
+
+    indices, distances = _bvh_knn(points, queries, 3, math.inf)
+
+    assert (indices == -1).all()
+    assert distances.isinf().all()
+
+
 def test_native_argument_validation():
     points = torch.zeros(2, 3)
 
     with pytest.raises(RuntimeError, match=r"k must be in \[1, 64\]"):
-        _C.BvhIndex(points).knn(points, 65, math.inf)
+        _bvh_knn(points, points, 65, math.inf)
     with pytest.raises(RuntimeError, match="float32"):
-        _C.BvhIndex(points.to(torch.float64))
+        _C.build_bvh(points.to(torch.float64))
     with pytest.raises(RuntimeError, match="contiguous"):
-        _C.BvhIndex(torch.zeros(3, 2).t())
+        _C.build_bvh(torch.zeros(3, 2).t())
 
 
 def test_native_symmetric_eigh_argument_validation():
@@ -113,7 +127,7 @@ def test_cuda_backend_uses_current_stream():
     with torch.cuda.stream(stream):
         points = torch.rand(100, 3, device="cuda")
         queries = torch.rand(10, 3, device="cuda")
-        indices, _ = _C.BvhIndex(points).knn(queries, 1, math.inf)
+        indices, _ = _bvh_knn(points, queries, 1, math.inf)
         marker = indices.clone()
         matrices = torch.eye(3, device="cuda").expand(100, -1, -1).clone()
         eigenvalues, eigenvectors = _C.symmetric_eigh_3x3(matrices)
@@ -123,6 +137,22 @@ def test_cuda_backend_uses_current_stream():
     assert (marker >= 0).all()
     assert (eigenvalue_marker == 1).all()
     assert (eigenvector_marker.norm(dim=-1) == 1).all()
+
+
+@pytest.mark.skipif(
+    not (torch.cuda.is_available() and _C.has_cuda()), reason="CUDA backend unavailable"
+)
+def test_cuda_bvh_is_held_by_torch_allocator():
+    points = torch.rand(10_000, 3, device="cuda")
+    before = torch.cuda.memory_allocated()
+    nodes, prim_ids = _C.build_bvh(points)
+    held = torch.cuda.memory_allocated() - before
+
+    assert nodes.is_cuda and prim_ids.is_cuda
+    assert prim_ids.shape == (10_000,)
+    assert held >= nodes.numel() + 4 * prim_ids.numel()
+    del nodes, prim_ids
+    assert torch.cuda.memory_allocated() == before
 
 
 @pytest.mark.skipif(
@@ -137,9 +167,7 @@ def test_cuda_bvh_allocations_follow_points_device():
     queries = torch.rand(9, 3, generator=generator).to(points_device)
 
     with torch.cuda.device(caller_device):
-        indices, distances = _C.BvhIndex(points).knn(
-            queries, 5, math.inf
-        )
+        indices, distances = _bvh_knn(points, queries, 5, math.inf)
         assert torch.cuda.current_device() == caller_device.index
 
     expected = torch.cdist(queries, points).square().topk(
