@@ -1,12 +1,7 @@
 #include "backend.h"
+#include "common/cuda.h"
 #include "common/farthest_point.h"
 
-#include <ATen/Dispatch.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/empty.h>
-#include <ATen/ops/full.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -126,8 +121,8 @@ int grid_blocks(int64_t count) {
   const int64_t needed = (count + per_block - 1) / per_block;
   int device = 0;
   int multiprocessors = 0;
-  C10_CUDA_CHECK(cudaGetDevice(&device));
-  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+  STD_CUDA_CHECK(cudaGetDevice(&device));
+  STD_CUDA_CHECK(cudaDeviceGetAttribute(
       &multiprocessors, cudaDevAttrMultiProcessorCount, device));
   const int64_t saturating = int64_t{multiprocessors} * kBlocksPerSm;
   return static_cast<int>(std::max<int64_t>(1, std::min(needed, saturating)));
@@ -135,33 +130,36 @@ int grid_blocks(int64_t count) {
 
 }  // namespace
 
-at::Tensor farthest_point_sample_cuda(
-    const at::Tensor& points, int64_t num_samples) {
-  const c10::cuda::CUDAGuard guard(points.get_device());
+Tensor farthest_point_sample_cuda(
+    const Tensor& points, int64_t num_samples) {
+  const DeviceGuard guard(points.get_device_index());
   const int64_t count = points.size(0);
-  auto selected = at::empty({num_samples}, points.options().dtype(at::kLong));
-  selected.narrow(0, 0, 1).zero_();
-  auto min_dist2 = at::full(
-      {count}, std::numeric_limits<double>::infinity(), points.options());
+  auto selected = torch::stable::new_empty(points, {num_samples}, kLong);
+  auto first = torch::stable::narrow(selected, 0, 0, 1);
+  torch::stable::zero_(first);
+  auto min_dist2 = torch::stable::full(
+      {count}, std::numeric_limits<double>::infinity(), points.scalar_type(),
+      std::nullopt, points.device());
 
   const int blocks = grid_blocks(count);
   // Only a multi-block grid needs somewhere to stage its partial results.
   const int64_t staging = blocks > 1 ? blocks : 0;
-  auto block_values = at::empty({staging}, points.options());
+  auto block_values = torch::stable::new_empty(points, {staging});
   auto block_indices =
-      at::empty({staging}, points.options().dtype(at::kLong));
+      torch::stable::new_empty(points, {staging}, kLong);
 
-  const auto stream = at::cuda::getCurrentCUDAStream();
-  AT_DISPATCH_FLOATING_TYPES(
-      points.scalar_type(), "farthest_point_sample_cuda", [&] {
-        auto* values = blocks > 1 ? block_values.data_ptr<scalar_t>() : nullptr;
-        auto* indices = blocks > 1 ? block_indices.data_ptr<int64_t>() : nullptr;
+  const auto stream = current_stream(points);
+  THO_DISPATCH_V2(points.scalar_type(), "farthest_point_sample_cuda", ([&] {
+        auto* values =
+            blocks > 1 ? block_values.mutable_data_ptr<scalar_t>() : nullptr;
+        auto* indices =
+            blocks > 1 ? block_indices.mutable_data_ptr<int64_t>() : nullptr;
         for (int64_t sample = 1; sample < num_samples; ++sample) {
           farthest_point_sample_step_kernel<scalar_t>
               <<<blocks, kBlockThreads, 0, stream>>>(
-                  points.data_ptr<scalar_t>(),
-                  min_dist2.data_ptr<scalar_t>(),
-                  selected.data_ptr<int64_t>(),
+                  points.const_data_ptr<scalar_t>(),
+                  min_dist2.mutable_data_ptr<scalar_t>(),
+                  selected.mutable_data_ptr<int64_t>(),
                   values,
                   indices,
                   count,
@@ -171,14 +169,14 @@ at::Tensor farthest_point_sample_cuda(
                 <<<1, kBlockThreads, 0, stream>>>(
                     values,
                     indices,
-                    selected.data_ptr<int64_t>(),
+                    selected.mutable_data_ptr<int64_t>(),
                     blocks,
                     count,
                     sample);
           }
         }
-      });
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
+      }), AT_FLOATING_TYPES);
+  STD_CUDA_KERNEL_LAUNCH_CHECK();
   return selected;
 }
 

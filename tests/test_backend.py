@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from torchpcl import _C
+from torchpcl._backend import _ops, has_cuda
 
 
 def _selected_distances(points, queries, indices):
@@ -14,7 +14,7 @@ def _selected_distances(points, queries, indices):
 
 
 def _bvh_knn(points, queries, k, radius):
-    return _C.bvh_knn(*_C.build_bvh(points), points, queries, k, radius)
+    return _ops.bvh_knn(*_ops.build_bvh(points), points, queries, k, radius)
 
 
 def test_bvh_knn_selects_reference_topk(search_device):
@@ -48,7 +48,7 @@ def test_packed_knn_is_batch_isolated(search_device):
     )
     query_batch_ids = torch.tensor([0, 1], device=search_device)
 
-    indices, _ = _C.packed_knn(
+    indices, _ = _ops.packed_knn(
         points, offsets, queries, query_batch_ids, 2, math.inf
     )
 
@@ -65,7 +65,7 @@ def test_packed_knn_empty_reference_batch_is_invalid(search_device):
     )
     query_batch_ids = torch.tensor([0, 1], device=search_device)
 
-    indices, _ = _C.packed_knn(
+    indices, _ = _ops.packed_knn(
         points, offsets, queries, query_batch_ids, 2, math.inf
     )
 
@@ -75,13 +75,13 @@ def test_packed_knn_empty_reference_batch_is_invalid(search_device):
 
 def test_native_radius_boundary_and_empty_queries(search_device):
     points = torch.zeros(1, 3, device=search_device)
-    bvh = _C.build_bvh(points)
+    bvh = _ops.build_bvh(points)
     queries = torch.tensor(
         [[0.0999, 0.0, 0.0], [0.1001, 0.0, 0.0]], device=search_device
     )
 
-    indices, _ = _C.bvh_knn(*bvh, points, queries, 1, 0.1)
-    empty_indices, empty_distances = _C.bvh_knn(
+    indices, _ = _ops.bvh_knn(*bvh, points, queries, 1, 0.1)
+    empty_indices, empty_distances = _ops.bvh_knn(
         *bvh, points, torch.empty(0, 3, device=search_device), 3, 1.0
     )
 
@@ -105,22 +105,22 @@ def test_native_argument_validation():
     with pytest.raises(RuntimeError, match=r"k must be in \[1, 64\]"):
         _bvh_knn(points, points, 65, math.inf)
     with pytest.raises(RuntimeError, match="float32"):
-        _C.build_bvh(points.to(torch.float64))
+        _ops.build_bvh(points.to(torch.float64))
     with pytest.raises(RuntimeError, match="contiguous"):
-        _C.build_bvh(torch.zeros(3, 2).t())
+        _ops.build_bvh(torch.zeros(3, 2).t())
 
 
 def test_native_symmetric_eigh_argument_validation():
     with pytest.raises(RuntimeError, match="float32 or float64"):
-        _C.symmetric_eigh_3x3(torch.zeros(2, 3, 3, dtype=torch.int64))
+        _ops.symmetric_eigh_3x3(torch.zeros(2, 3, 3, dtype=torch.int64))
     with pytest.raises(RuntimeError, match=r"shape \(\.\.\., 3, 3\)"):
-        _C.symmetric_eigh_3x3(torch.zeros(2, 3, 2))
+        _ops.symmetric_eigh_3x3(torch.zeros(2, 3, 2))
     with pytest.raises(RuntimeError, match="contiguous"):
-        _C.symmetric_eigh_3x3(torch.zeros(2, 3, 3).mT)
+        _ops.symmetric_eigh_3x3(torch.zeros(2, 3, 3).mT)
 
 
 @pytest.mark.skipif(
-    not (torch.cuda.is_available() and _C.has_cuda()), reason="CUDA backend unavailable"
+    not (torch.cuda.is_available() and has_cuda()), reason="CUDA backend unavailable"
 )
 def test_cuda_backend_uses_current_stream():
     stream = torch.cuda.Stream()
@@ -130,7 +130,7 @@ def test_cuda_backend_uses_current_stream():
         indices, _ = _bvh_knn(points, queries, 1, math.inf)
         marker = indices.clone()
         matrices = torch.eye(3, device="cuda").expand(100, -1, -1).clone()
-        eigenvalues, eigenvectors = _C.symmetric_eigh_3x3(matrices)
+        eigenvalues, eigenvectors = _ops.symmetric_eigh_3x3(matrices)
         eigenvalue_marker = eigenvalues.clone()
         eigenvector_marker = eigenvectors.clone()
     stream.synchronize()
@@ -140,12 +140,12 @@ def test_cuda_backend_uses_current_stream():
 
 
 @pytest.mark.skipif(
-    not (torch.cuda.is_available() and _C.has_cuda()), reason="CUDA backend unavailable"
+    not (torch.cuda.is_available() and has_cuda()), reason="CUDA backend unavailable"
 )
 def test_cuda_bvh_is_held_by_torch_allocator():
     points = torch.rand(10_000, 3, device="cuda")
     before = torch.cuda.memory_allocated()
-    nodes, prim_ids = _C.build_bvh(points)
+    nodes, prim_ids = _ops.build_bvh(points)
     held = torch.cuda.memory_allocated() - before
 
     assert nodes.is_cuda and prim_ids.is_cuda
@@ -156,7 +156,7 @@ def test_cuda_bvh_is_held_by_torch_allocator():
 
 
 @pytest.mark.skipif(
-    not (_C.has_cuda() and torch.cuda.device_count() >= 2),
+    not (has_cuda() and torch.cuda.device_count() >= 2),
     reason="multiple CUDA devices unavailable",
 )
 def test_cuda_bvh_allocations_follow_points_device():

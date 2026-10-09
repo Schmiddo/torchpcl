@@ -1,10 +1,6 @@
 #include "backend.h"
+#include "common/cuda.h"
 
-#include <ATen/Dispatch.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/empty.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAException.h>
 
 #include <cstdint>
 #include <limits>
@@ -91,28 +87,27 @@ __global__ void feature_knn1_kernel(
 }  // namespace
 
 SearchResult feature_knn1_cuda(
-    const at::Tensor& reference, const at::Tensor& queries) {
-  const c10::cuda::CUDAGuard guard(reference.get_device());
-  auto indices = at::empty({queries.size(0)}, queries.options().dtype(at::kLong));
-  auto distances2 = at::empty({queries.size(0)}, queries.options());
+    const Tensor& reference, const Tensor& queries) {
+  const DeviceGuard guard(reference.get_device_index());
+  auto indices = torch::stable::new_empty(queries, {queries.size(0)}, kLong);
+  auto distances2 = torch::stable::new_empty(queries, {queries.size(0)});
   if (queries.size(0) == 0) {
     return {indices, distances2};
   }
 
-  const auto stream = at::cuda::getCurrentCUDAStream();
+  const auto stream = current_stream(reference);
   const auto blocks = (queries.size(0) + kBlock - 1) / kBlock;
-  AT_DISPATCH_FLOATING_TYPES(
-      reference.scalar_type(), "feature_knn1_cuda", [&] {
+  THO_DISPATCH_V2(reference.scalar_type(), "feature_knn1_cuda", ([&] {
         feature_knn1_kernel<scalar_t><<<blocks, kBlock, 0, stream>>>(
-            indices.data_ptr<int64_t>(),
-            distances2.data_ptr<scalar_t>(),
-            reference.data_ptr<scalar_t>(),
-            queries.data_ptr<scalar_t>(),
+            indices.mutable_data_ptr<int64_t>(),
+            distances2.mutable_data_ptr<scalar_t>(),
+            reference.const_data_ptr<scalar_t>(),
+            queries.const_data_ptr<scalar_t>(),
             reference.size(0),
             queries.size(0),
             reference.size(1));
-      });
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
+      }), AT_FLOATING_TYPES);
+  STD_CUDA_KERNEL_LAUNCH_CHECK();
   return {indices, distances2};
 }
 

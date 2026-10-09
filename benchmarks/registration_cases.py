@@ -219,10 +219,10 @@ def make_case(pair: PreparedPair, method: str, backend: str, device: str = "cpu"
     if backend == "torchpcl":
         import torch
         import torchpcl as tp
-        from torchpcl import _C
+        from torchpcl._backend import has_cuda
 
         if device == "cuda":
-            select_devices("cuda", torch.cuda.is_available() and _C.has_cuda())
+            select_devices("cuda", torch.cuda.is_available() and has_cuda())
             synchronize = torch.cuda.synchronize
             device_memory_reader = cuda_process_memory_reader()
         dtype = getattr(torch, config.dtype)

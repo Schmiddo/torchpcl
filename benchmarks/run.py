@@ -118,9 +118,9 @@ def backend_support(backend: str) -> tuple[bool, str | None]:
     """Import the backend, or exit with setup guidance; report its CUDA support."""
     if backend == "torchpcl":
         import torch
-        from torchpcl import _C
+        from torchpcl._backend import has_cuda
 
-        return torch.cuda.is_available() and _C.has_cuda(), None
+        return torch.cuda.is_available() and has_cuda(), None
     if backend == "small-gicp":
         require_small_gicp()
         return False, SMALL_GICP_CPU_ONLY

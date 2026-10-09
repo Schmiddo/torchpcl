@@ -51,8 +51,8 @@ def cuda_enabled() -> bool:
 
 
 def parallel_flags() -> tuple[list[str], list[str]]:
-    # ATen's OpenMP backend is header-inline. Without -fopenmp,
-    # at::parallel_for silently becomes single-threaded on Linux.
+    # The CPU BVH builder uses OpenMP tasks directly; without -fopenmp it
+    # builds serially. (torch's parallel_for runs inside libtorch.)
     if sys.platform.startswith("linux"):
         return ["-O3", "-fopenmp"], ["-fopenmp"]
     return ["-O3"], []
@@ -61,8 +61,11 @@ def parallel_flags() -> tuple[list[str], list[str]]:
 cubql_root = find_cubql_root()
 cxx_flags, link_flags = parallel_flags()
 include_dirs = [str(CSRC), str(cubql_root)]
+# The extension uses only torch's stable ABI and Python's limited API, so one
+# build loads in every torch >= 2.10 and CPython >= 3.12.
+stable_macros = [("TORCH_TARGET_VERSION", "0x020A000000000000")]
 cpu_sources = [
-    "src/torchpcl/csrc/bindings.cpp",
+    "src/torchpcl/csrc/ops.cpp",
     "src/torchpcl/csrc/cpu/bvh.cpp",
     "src/torchpcl/csrc/cpu/feature_knn.cpp",
     "src/torchpcl/csrc/cpu/fpfh.cpp",
@@ -86,20 +89,25 @@ if cuda_enabled():
             "src/torchpcl/csrc/cuda/symmetric_eigh.cu",
         ],
         include_dirs=include_dirs,
-        define_macros=[("TORCHPCL_WITH_CUDA", "1")],
+        # USE_CUDA declares the CUDA part of torch's C shim (current stream).
+        define_macros=stable_macros + [("TORCHPCL_WITH_CUDA", "1"), ("USE_CUDA", "1")],
         extra_compile_args={"cxx": cxx_flags, "nvcc": ["-O3"]},
         extra_link_args=link_flags,
+        py_limited_api=True,
     )
 else:
     extension = CppExtension(
         "torchpcl._C",
         cpu_sources,
         include_dirs=include_dirs,
+        define_macros=stable_macros,
         extra_compile_args=cxx_flags,
         extra_link_args=link_flags,
+        py_limited_api=True,
     )
 
 setup(
     ext_modules=[extension],
     cmdclass={"build_ext": BuildExtension},
+    options={"bdist_wheel": {"py_limited_api": "cp312"}},
 )

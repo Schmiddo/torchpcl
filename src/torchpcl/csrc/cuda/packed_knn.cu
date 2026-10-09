@@ -1,12 +1,8 @@
 #include "backend.h"
+#include "common/cuda.h"
 #include "common/candidate.h"
 #include "common/distance.h"
 
-#include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/empty.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/util/Exception.h>
 #include <math_constants.h>
 
 #include <cstdint>
@@ -117,46 +113,45 @@ __global__ void packed_knn_kernel(
 }  // namespace
 
 SearchResult packed_knn_cuda(
-    const at::Tensor& points,
-    const at::Tensor& point_offsets,
-    const at::Tensor& queries,
-    const at::Tensor& query_batch_ids,
+    const Tensor& points,
+    const Tensor& point_offsets,
+    const Tensor& queries,
+    const Tensor& query_batch_ids,
     int64_t k,
     double radius) {
-  TORCH_CHECK(points.is_cuda(), "points must be a CUDA tensor");
-  const c10::cuda::CUDAGuard guard(points.get_device());
-  auto indices = at::empty(
-      {queries.size(0), k}, queries.options().dtype(at::kLong));
-  auto distances = at::empty({queries.size(0), k}, queries.options());
+  STD_TORCH_CHECK(points.is_cuda(), "points must be a CUDA tensor");
+  const DeviceGuard guard(points.get_device_index());
+  auto indices = torch::stable::new_empty(queries, {queries.size(0), k}, kLong);
+  auto distances = torch::stable::new_empty(queries, {queries.size(0), k});
   if (queries.size(0) == 0) {
     return {indices, distances};
   }
-  const auto stream = at::cuda::getCurrentCUDAStream();
+  const auto stream = current_stream(points);
   const auto blocks = (queries.size(0) + kBlock - 1) / kBlock;
   if (k == 1) {
     packed_knn_kernel<1><<<blocks, kBlock, 0, stream>>>(
-        indices.data_ptr<int64_t>(),
-        distances.data_ptr<float>(),
-        points.data_ptr<float>(),
-        point_offsets.data_ptr<int64_t>(),
-        queries.data_ptr<float>(),
-        query_batch_ids.data_ptr<int64_t>(),
+        indices.mutable_data_ptr<int64_t>(),
+        distances.mutable_data_ptr<float>(),
+        points.const_data_ptr<float>(),
+        point_offsets.const_data_ptr<int64_t>(),
+        queries.const_data_ptr<float>(),
+        query_batch_ids.const_data_ptr<int64_t>(),
         queries.size(0),
         1,
         inclusive_bound2(radius));
   } else {
     packed_knn_kernel<kMaxK><<<blocks, kBlock, 0, stream>>>(
-        indices.data_ptr<int64_t>(),
-        distances.data_ptr<float>(),
-        points.data_ptr<float>(),
-        point_offsets.data_ptr<int64_t>(),
-        queries.data_ptr<float>(),
-        query_batch_ids.data_ptr<int64_t>(),
+        indices.mutable_data_ptr<int64_t>(),
+        distances.mutable_data_ptr<float>(),
+        points.const_data_ptr<float>(),
+        point_offsets.const_data_ptr<int64_t>(),
+        queries.const_data_ptr<float>(),
+        query_batch_ids.const_data_ptr<int64_t>(),
         queries.size(0),
         static_cast<int>(k),
         inclusive_bound2(radius));
   }
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  STD_CUDA_KERNEL_LAUNCH_CHECK();
   return {indices, distances};
 }
 

@@ -27,7 +27,7 @@ Issues = "https://github.com/Schmiddo/torchpcl/issues"
 # The extensions build against the environment's torch (see setup.py), so
 # install with build isolation disabled (configured below for uv).
 [build-system]
-requires = ["setuptools>=77", "torch>=2.9.0"]
+requires = ["setuptools>=77", "torch>=2.10.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import torch
 
-from . import _C
+from . import _C  # noqa: F401  (loads torch.ops.torchpcl)
 from .cloud import PointCloud, batch_ids
+
+_ops = torch.ops.torchpcl
+
+
+def has_cuda() -> bool:
+    """Whether the native extension was built with CUDA kernels."""
+    return _ops.has_cuda()
 
 
 def _check_device(device: torch.device) -> None:
     if device.type == "cpu":
         return
     if device.type == "cuda":
-        if not _C.has_cuda():
+        if not has_cuda():
             raise RuntimeError(
                 "torchpcl was built without CUDA support; reinstall with "
                 "TORCHPCL_WITH_CUDA=1 and a CUDA toolkit"
@@ -27,13 +34,13 @@ def symmetric_eigh_3x3(
     """Return sorted eigenvalues and the smallest eigenvector of symmetric 3x3s."""
     if matrices.ndim < 2 or matrices.shape[-2:] != (3, 3):
         raise ValueError("matrices must have shape (..., 3, 3)")
-    return _C.symmetric_eigh_3x3(matrices.contiguous())
+    return _ops.symmetric_eigh_3x3(matrices.contiguous())
 
 
 def farthest_point_sample(points: torch.Tensor, num_samples: int) -> torch.Tensor:
     """Return num_samples row indices in greedy farthest-point selection order."""
     _check_device(points.device)
-    return _C.farthest_point_sample(points.detach().contiguous(), num_samples)
+    return _ops.farthest_point_sample(points.detach().contiguous(), num_samples)
 
 
 def feature_knn1(
@@ -41,7 +48,7 @@ def feature_knn1(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return the exact nearest feature row and squared distance per query."""
     _check_device(reference.device)
-    return _C.feature_knn1(
+    return _ops.feature_knn1(
         reference.detach().contiguous(), queries.detach().contiguous()
     )
 
@@ -51,7 +58,7 @@ def feature_mutual_knn1(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return nearest target rows of source rows and vice versa, with distances."""
     _check_device(source.device)
-    return _C.feature_mutual_knn1(
+    return _ops.feature_mutual_knn1(
         source.detach().contiguous(), target.detach().contiguous()
     )
 
@@ -61,7 +68,7 @@ def neighbor_moments(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return neighborhood means, centered scatter matrices and counts."""
     _check_device(points.device)
-    return _C.neighbor_moments(points.detach().contiguous(), indices.contiguous())
+    return _ops.neighbor_moments(points.detach().contiguous(), indices.contiguous())
 
 
 def fpfh(
@@ -73,7 +80,7 @@ def fpfh(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return FPFH descriptors and validity from a self-neighborhood."""
     _check_device(points.device)
-    return _C.fpfh(
+    return _ops.fpfh(
         points.detach().contiguous(),
         normals.detach().contiguous(),
         normal_valid.contiguous(),
@@ -92,7 +99,7 @@ class BvhBackend:
         _check_device(reference.device)
         self._points = reference.points.detach().to(torch.float32).contiguous()
         # (nodes, prim_ids), on the points' device (see csrc/backend.h).
-        self._bvh = None if self._points.shape[0] == 0 else _C.build_bvh(self._points)
+        self._bvh = None if self._points.shape[0] == 0 else _ops.build_bvh(self._points)
 
     def knn(
         self,
@@ -109,7 +116,7 @@ class BvhBackend:
                     shape, torch.inf, dtype=torch.float32, device=query_points.device
                 ),
             )
-        return _C.bvh_knn(*self._bvh, self._points, query_points, k, radius)
+        return _ops.bvh_knn(*self._bvh, self._points, query_points, k, radius)
 
 
 class PackedBackend:
@@ -126,7 +133,7 @@ class PackedBackend:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         query_points = queries.points.detach().to(torch.float32).contiguous()
         query_batch_ids = batch_ids(queries.offsets, query_points.shape[0])
-        return _C.packed_knn(
+        return _ops.packed_knn(
             self._points,
             self._offsets,
             query_points,

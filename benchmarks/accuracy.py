@@ -361,9 +361,9 @@ def main(argv=None):
     import torch
 
     torch.set_num_threads(args.threads)
-    from torchpcl import _C
+    from torchpcl._backend import has_cuda
 
-    cuda_available = torch.cuda.is_available() and _C.has_cuda()
+    cuda_available = torch.cuda.is_available() and has_cuda()
     try:
         devices, skipped = select_devices(args.device, cuda_available)
     except ValueError as error:

@@ -1,11 +1,7 @@
 #include "backend.h"
+#include "common/cuda.h"
 #include "common/fpfh.h"
 
-#include <ATen/Dispatch.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/empty.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
 
 namespace torchpcl {
 namespace {
@@ -58,46 +54,46 @@ __global__ void fpfh_descriptor_kernel(
 }  // namespace
 
 FpfhResult fpfh_cuda(
-    const at::Tensor& points,
-    const at::Tensor& normals,
-    const at::Tensor& normal_valid,
-    const at::Tensor& indices,
-    const at::Tensor& distances2) {
-  const c10::cuda::CUDAGuard guard(points.get_device());
+    const Tensor& points,
+    const Tensor& normals,
+    const Tensor& normal_valid,
+    const Tensor& indices,
+    const Tensor& distances2) {
+  const DeviceGuard guard(points.get_device_index());
   const int64_t count = points.size(0);
   const int64_t k = indices.size(1);
-  auto spfh = at::empty({count, kFpfhSize}, points.options());
-  auto spfh_valid = at::empty({count}, normal_valid.options());
-  auto descriptors = at::empty({count, kFpfhSize}, points.options());
-  auto valid = at::empty({count}, normal_valid.options());
+  auto spfh = torch::stable::new_empty(points, {count, kFpfhSize});
+  auto spfh_valid = torch::stable::new_empty(normal_valid, {count});
+  auto descriptors = torch::stable::new_empty(points, {count, kFpfhSize});
+  auto valid = torch::stable::new_empty(normal_valid, {count});
   if (count == 0) return {descriptors, valid};
 
-  const auto stream = at::cuda::getCurrentCUDAStream();
+  const auto stream = current_stream(points);
   const auto blocks = (count + kBlock - 1) / kBlock;
-  AT_DISPATCH_FLOATING_TYPES(points.scalar_type(), "fpfh_cuda", [&] {
+  THO_DISPATCH_V2(points.scalar_type(), "fpfh_cuda", ([&] {
     spfh_kernel<scalar_t><<<blocks, kBlock, 0, stream>>>(
-        points.data_ptr<scalar_t>(),
-        normals.data_ptr<scalar_t>(),
-        normal_valid.data_ptr<bool>(),
-        indices.data_ptr<int64_t>(),
-        spfh.data_ptr<scalar_t>(),
-        spfh_valid.data_ptr<bool>(),
+        points.const_data_ptr<scalar_t>(),
+        normals.const_data_ptr<scalar_t>(),
+        normal_valid.const_data_ptr<bool>(),
+        indices.const_data_ptr<int64_t>(),
+        spfh.mutable_data_ptr<scalar_t>(),
+        spfh_valid.mutable_data_ptr<bool>(),
         count,
         k);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    STD_CUDA_KERNEL_LAUNCH_CHECK();
     fpfh_descriptor_kernel<scalar_t><<<blocks, kBlock, 0, stream>>>(
-        points.data_ptr<scalar_t>(),
-        normal_valid.data_ptr<bool>(),
-        indices.data_ptr<int64_t>(),
-        distances2.data_ptr<scalar_t>(),
-        spfh.data_ptr<scalar_t>(),
-        spfh_valid.data_ptr<bool>(),
-        descriptors.data_ptr<scalar_t>(),
-        valid.data_ptr<bool>(),
+        points.const_data_ptr<scalar_t>(),
+        normal_valid.const_data_ptr<bool>(),
+        indices.const_data_ptr<int64_t>(),
+        distances2.const_data_ptr<scalar_t>(),
+        spfh.mutable_data_ptr<scalar_t>(),
+        spfh_valid.mutable_data_ptr<bool>(),
+        descriptors.mutable_data_ptr<scalar_t>(),
+        valid.mutable_data_ptr<bool>(),
         count,
         k);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-  });
+    STD_CUDA_KERNEL_LAUNCH_CHECK();
+  }), AT_FLOATING_TYPES);
   return {descriptors, valid};
 }
 

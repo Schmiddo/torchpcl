@@ -5,15 +5,10 @@
 #include "cuBQL/queries/pointData/knn.h"
 
 #include "backend.h"
+#include "common/cuda.h"
 #include "common/bvh.h"
 #include "common/distance.h"
 
-#include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/empty.h>
-#include <ATen/ops/zeros.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/util/Exception.h>
 #include <math_constants.h>
 
 #include <cstdint>
@@ -31,27 +26,29 @@ constexpr int kBlock = 256;
 // which is torch's current stream, as the caching allocator expects.
 class TensorMemoryResource final : public cuBQL::GpuMemoryResource {
  public:
-  explicit TensorMemoryResource(at::Device device)
-      : options_(at::TensorOptions().dtype(at::kByte).device(device)) {}
+  // Blocks are allocated on the device of `like`.
+  explicit TensorMemoryResource(const Tensor& like) : like_(like) {}
 
   void malloc(void** ptr, size_t size, cudaStream_t) override {
-    auto block = at::empty({static_cast<int64_t>(size)}, options_);
-    *ptr = block.data_ptr();
+    auto block = torch::stable::new_empty(
+        like_, {static_cast<int64_t>(size)}, kByte);
+    *ptr = block.mutable_data_ptr();
     blocks_.emplace(*ptr, std::move(block));
   }
 
   void free(void* ptr, cudaStream_t) override { blocks_.erase(ptr); }
 
   // The block behind `ptr`, which cuBQL then no longer owns.
-  at::Tensor take(void* ptr) {
+  Tensor take(void* ptr) {
     auto block = blocks_.extract(ptr);
-    TORCH_CHECK(!block.empty(), "cuBQL returned memory it did not allocate");
+    STD_TORCH_CHECK(
+        !block.empty(), "cuBQL returned memory it did not allocate");
     return std::move(block.mapped());
   }
 
  private:
-  at::TensorOptions options_;
-  std::unordered_map<void*, at::Tensor> blocks_;
+  const Tensor& like_;
+  std::unordered_map<void*, Tensor> blocks_;
 };
 
 // Also raises `any_kept` when some point's box is non-empty (not NaN).
@@ -127,74 +124,85 @@ __global__ void knn_query(
 
 }  // namespace
 
-BvhResult build_bvh_cuda(const at::Tensor& points) {
-  const c10::cuda::CUDAGuard guard(points.device());
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+BvhResult build_bvh_cuda(const Tensor& points) {
+  const DeviceGuard guard(points.get_device_index());
+  const cudaStream_t stream = current_stream(points);
   const auto count = static_cast<int>(points.size(0));
-  auto boxes = at::empty({points.size(0), 6}, points.options());
-  auto any_kept = at::zeros({1}, points.options().dtype(at::kInt));
+  auto boxes = torch::stable::new_empty(points, {points.size(0), 6});
+  auto any_kept = torch::stable::new_zeros(points, {1}, kInt);
   make_boxes<<<(count + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
-      reinterpret_cast<cuBQL::box3f*>(boxes.data_ptr<float>()),
-      any_kept.data_ptr<int>(),
-      reinterpret_cast<const cuBQL::vec3f*>(points.data_ptr<float>()),
+      reinterpret_cast<cuBQL::box3f*>(boxes.mutable_data_ptr<float>()),
+      any_kept.mutable_data_ptr<int>(),
+      reinterpret_cast<const cuBQL::vec3f*>(points.const_data_ptr<float>()),
       count);
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  STD_CUDA_KERNEL_LAUNCH_CHECK();
   // cuBQL's GPU builder faults when every box is empty; as on the CPU, such
   // a cloud gets no tree and `bvh_knn_cuda` answers without one. The builder
   // synchronizes anyway, so this read costs little.
-  if (any_kept.item<int>() == 0) {
-    return {at::empty({0, kBvhNodeBytes}, points.options().dtype(at::kByte)),
-            at::empty({0}, points.options().dtype(at::kInt))};
+  int kept = 0;
+  STD_CUDA_CHECK(cudaMemcpyAsync(
+      &kept, any_kept.const_data_ptr<int>(), sizeof(kept),
+      cudaMemcpyDeviceToHost, stream));
+  STD_CUDA_CHECK(cudaStreamSynchronize(stream));
+  if (kept == 0) {
+    return {torch::stable::new_empty(points, {0, kBvhNodeBytes}, kByte),
+            torch::stable::new_empty(points, {0}, kInt)};
   }
-  TensorMemoryResource memory(points.device());
+  TensorMemoryResource memory(points);
   cuBQL::bvh3f bvh{};
   cuBQL::gpuBuilder(
       bvh,
-      reinterpret_cast<const cuBQL::box3f*>(boxes.data_ptr<float>()),
+      reinterpret_cast<const cuBQL::box3f*>(boxes.mutable_data_ptr<float>()),
       static_cast<uint32_t>(count),
       cuBQL::BuildConfig(kCudaBvhLeafSize),
       stream,
       memory);
-  auto nodes = memory.take(bvh.nodes)
-                   .narrow(0, 0, int64_t{bvh.numNodes} * kBvhNodeBytes)
-                   .view({int64_t{bvh.numNodes}, kBvhNodeBytes});
-  auto prim_ids = memory.take(bvh.primIDs)
-                      .narrow(0, 0, int64_t{bvh.numPrims} * 4)
-                      .view(at::kInt);
+  const int64_t num_nodes = bvh.numNodes;
+  auto node_block = memory.take(bvh.nodes);
+  auto nodes = torch::stable::view(
+      torch::stable::narrow(node_block, 0, 0, num_nodes * kBvhNodeBytes),
+      {num_nodes, kBvhNodeBytes});
+  // The stable ABI has no dtype view, so the ids are copied out of their
+  // byte block; it is 4 bytes per point, next to a whole build.
+  const int64_t num_prims = bvh.numPrims;
+  auto prim_ids = torch::stable::new_empty(points, {num_prims}, kInt);
+  STD_CUDA_CHECK(cudaMemcpyAsync(
+      prim_ids.mutable_data_ptr<int32_t>(), bvh.primIDs,
+      num_prims * sizeof(int32_t), cudaMemcpyDeviceToDevice, stream));
   return {nodes, prim_ids};
 }
 
 SearchResult bvh_knn_cuda(
-    const at::Tensor& nodes,
-    const at::Tensor& prim_ids,
-    const at::Tensor& points,
-    const at::Tensor& queries,
+    const Tensor& nodes,
+    const Tensor& prim_ids,
+    const Tensor& points,
+    const Tensor& queries,
     int64_t k,
     double radius) {
-  const c10::cuda::CUDAGuard guard(points.device());
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const DeviceGuard guard(points.get_device_index());
+  const cudaStream_t stream = current_stream(points);
   const auto count = queries.size(0);
-  auto indices = at::empty({count, k}, queries.options().dtype(at::kLong));
-  auto distances = at::empty({count, k}, queries.options());
+  auto indices = torch::stable::new_empty(queries, {count, k}, kLong);
+  auto distances = torch::stable::new_empty(queries, {count, k});
   if (count == 0) {
     return {indices, distances};
   }
   if (prim_ids.numel() == 0) {  // every reference point was NaN
-    indices.fill_(-1);
-    distances.fill_(std::numeric_limits<float>::infinity());
+    torch::stable::fill_(indices, -1);
+    torch::stable::fill_(distances, std::numeric_limits<float>::infinity());
     return {indices, distances};
   }
   const cuBQL::bvh3f bvh = bvh_view(nodes, prim_ids);
   const float bound2 = inclusive_bound2(radius);
   const float cull2 = cull_bound2(bound2);
   const auto* point_data =
-      reinterpret_cast<const cuBQL::vec3f*>(points.data_ptr<float>());
+      reinterpret_cast<const cuBQL::vec3f*>(points.const_data_ptr<float>());
   const auto* query_data =
-      reinterpret_cast<const cuBQL::vec3f*>(queries.data_ptr<float>());
+      reinterpret_cast<const cuBQL::vec3f*>(queries.const_data_ptr<float>());
   if (k == 1) {
     nearest_query<<<(count + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
-        indices.data_ptr<int64_t>(),
-        distances.data_ptr<float>(),
+        indices.mutable_data_ptr<int64_t>(),
+        distances.mutable_data_ptr<float>(),
         bvh,
         point_data,
         query_data,
@@ -203,8 +211,8 @@ SearchResult bvh_knn_cuda(
         bound2);
   } else {
     knn_query<<<(count + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
-        indices.data_ptr<int64_t>(),
-        distances.data_ptr<float>(),
+        indices.mutable_data_ptr<int64_t>(),
+        distances.mutable_data_ptr<float>(),
         bvh,
         point_data,
         query_data,
@@ -213,7 +221,7 @@ SearchResult bvh_knn_cuda(
         cull2,
         bound2);
   }
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  STD_CUDA_KERNEL_LAUNCH_CHECK();
   return {indices, distances};
 }
 

@@ -1,8 +1,5 @@
 #include "backend.h"
 
-#include <ATen/Dispatch.h>
-#include <ATen/Parallel.h>
-#include <ATen/ops/empty.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -44,7 +41,7 @@ std::vector<scalar_t> pack_reference(
   constexpr int64_t width = chunk_width<scalar_t>();
   const int64_t chunks = (count + width - 1) / width;
   std::vector<scalar_t> packed(chunks * dimension * width, scalar_t(0));
-  at::parallel_for(0, chunks, 64, [&](int64_t begin, int64_t end) {
+  parallel_for(0, chunks, 64, [&](int64_t begin, int64_t end) {
     for (int64_t chunk = begin; chunk < end; ++chunk) {
       scalar_t* out = packed.data() + chunk * dimension * width;
       for (int64_t lane = 0; lane < width; ++lane) {
@@ -157,29 +154,29 @@ TORCHPCL_TARGET_CLONES void nearest_rows(
 // reference minima, merged in run order afterwards. Runs cover increasing
 // query ranges, so ties keep the lower index both ways.
 void nearest_cpu(
-    const at::Tensor& reference,
-    const at::Tensor& queries,
-    at::Tensor& indices,
-    at::Tensor& distances2,
-    at::Tensor* reverse_indices,
-    at::Tensor* reverse_distances2) {
+    const Tensor& reference,
+    const Tensor& queries,
+    Tensor& indices,
+    Tensor& distances2,
+    Tensor* reverse_indices,
+    Tensor* reverse_distances2) {
   const int64_t reference_count = reference.size(0);
   const int64_t query_count = queries.size(0);
   const int64_t dimension = reference.size(1);
-  AT_DISPATCH_FLOATING_TYPES(reference.scalar_type(), "feature_knn1_cpu", [&] {
+  THO_DISPATCH_V2(reference.scalar_type(), "feature_knn1_cpu", ([&] {
     const auto packed = pack_reference(
-        reference.data_ptr<scalar_t>(), reference_count, dimension);
-    const auto* query_data = queries.data_ptr<scalar_t>();
-    auto* index_data = indices.data_ptr<int64_t>();
-    auto* distance_data = distances2.data_ptr<scalar_t>();
+        reference.const_data_ptr<scalar_t>(), reference_count, dimension);
+    const auto* query_data = queries.const_data_ptr<scalar_t>();
+    auto* index_data = indices.mutable_data_ptr<int64_t>();
+    auto* distance_data = distances2.mutable_data_ptr<scalar_t>();
     const int64_t groups = (query_count + kQueries - 1) / kQueries;
     const bool reverse = reverse_indices != nullptr;
-    const int64_t runs = std::min<int64_t>(at::get_num_threads(), groups);
+    const int64_t runs = std::min<int64_t>(get_num_threads(), groups);
     const int64_t buffers = reverse ? runs : 0;
     std::vector<scalar_t> column_best(
         buffers * reference_count, std::numeric_limits<scalar_t>::infinity());
     std::vector<int64_t> column_index(buffers * reference_count, -1);
-    at::parallel_for(0, runs, 1, [&](int64_t begin, int64_t end) {
+    parallel_for(0, runs, 1, [&](int64_t begin, int64_t end) {
       for (int64_t run = begin; run < end; ++run) {
         const int64_t offset = run * reference_count;
         const int64_t last = groups * (run + 1) / runs;
@@ -200,9 +197,10 @@ void nearest_cpu(
       }
     });
     if (!reverse) return;
-    auto* reverse_index_data = reverse_indices->data_ptr<int64_t>();
-    auto* reverse_distance_data = reverse_distances2->data_ptr<scalar_t>();
-    at::parallel_for(0, reference_count, 4096, [&](int64_t begin, int64_t end) {
+    auto* reverse_index_data = reverse_indices->mutable_data_ptr<int64_t>();
+    auto* reverse_distance_data =
+        reverse_distances2->mutable_data_ptr<scalar_t>();
+    parallel_for(0, reference_count, 4096, [&](int64_t begin, int64_t end) {
       for (int64_t row = begin; row < end; ++row) {
         scalar_t best = std::numeric_limits<scalar_t>::infinity();
         int64_t best_index = -1;
@@ -219,18 +217,18 @@ void nearest_cpu(
         reverse_distance_data[row] = best;
       }
     });
-  });
+  }), AT_FLOATING_TYPES);
 }
 
 }  // namespace
 
 SearchResult feature_knn1_cpu(
-    const at::Tensor& reference, const at::Tensor& queries) {
-  auto indices = at::empty({queries.size(0)}, queries.options().dtype(at::kLong));
-  auto distances2 = at::empty({queries.size(0)}, queries.options());
+    const Tensor& reference, const Tensor& queries) {
+  auto indices = torch::stable::new_empty(queries, {queries.size(0)}, kLong);
+  auto distances2 = torch::stable::new_empty(queries, {queries.size(0)});
   if (reference.size(0) == 0) {
-    indices.fill_(-1);
-    distances2.fill_(std::numeric_limits<double>::infinity());
+    torch::stable::fill_(indices, -1);
+    torch::stable::fill_(distances2, std::numeric_limits<double>::infinity());
     return {indices, distances2};
   }
   nearest_cpu(reference, queries, indices, distances2, nullptr, nullptr);
@@ -238,16 +236,18 @@ SearchResult feature_knn1_cpu(
 }
 
 MutualSearchResult feature_mutual_knn1_cpu(
-    const at::Tensor& source, const at::Tensor& target) {
-  auto indices = at::empty({source.size(0)}, source.options().dtype(at::kLong));
-  auto distances2 = at::empty({source.size(0)}, source.options());
+    const Tensor& source, const Tensor& target) {
+  auto indices = torch::stable::new_empty(source, {source.size(0)}, kLong);
+  auto distances2 = torch::stable::new_empty(source, {source.size(0)});
   auto reverse_indices =
-      at::empty({target.size(0)}, target.options().dtype(at::kLong));
-  auto reverse_distances2 = at::empty({target.size(0)}, target.options());
+      torch::stable::new_empty(target, {target.size(0)}, kLong);
+  auto reverse_distances2 = torch::stable::new_empty(target, {target.size(0)});
   if (source.size(0) == 0 || target.size(0) == 0) {
-    for (auto* tensor : {&indices, &reverse_indices}) tensor->fill_(-1);
+    for (auto* tensor : {&indices, &reverse_indices}) {
+      torch::stable::fill_(*tensor, -1);
+    }
     for (auto* tensor : {&distances2, &reverse_distances2}) {
-      tensor->fill_(std::numeric_limits<double>::infinity());
+      torch::stable::fill_(*tensor, std::numeric_limits<double>::infinity());
     }
     return {indices, distances2, reverse_indices, reverse_distances2};
   }

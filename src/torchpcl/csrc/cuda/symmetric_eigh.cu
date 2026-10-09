@@ -1,11 +1,7 @@
 #include "backend.h"
+#include "common/cuda.h"
 #include "common/symmetric_eigh.h"
 
-#include <ATen/Dispatch.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <ATen/ops/empty.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAException.h>
 
 namespace torchpcl {
 namespace {
@@ -30,30 +26,29 @@ __global__ void symmetric_eigh_3x3_kernel(
 
 }  // namespace
 
-EigenResult symmetric_eigh_3x3_cuda(const at::Tensor& matrices) {
-  const c10::cuda::CUDAGuard guard(matrices.get_device());
+EigenResult symmetric_eigh_3x3_cuda(const Tensor& matrices) {
+  const DeviceGuard guard(matrices.get_device_index());
   auto output_sizes = matrices.sizes().vec();
   output_sizes.resize(output_sizes.size() - 2);
   output_sizes.push_back(3);
-  auto eigenvalues = at::empty(output_sizes, matrices.options());
-  auto smallest_eigenvectors = at::empty(output_sizes, matrices.options());
+  auto eigenvalues = torch::stable::new_empty(matrices, output_sizes);
+  auto smallest_eigenvectors = torch::stable::new_empty(matrices, output_sizes);
   const int64_t count = matrices.numel() / 9;
   if (count == 0) {
     return {eigenvalues, smallest_eigenvectors};
   }
 
-  const auto stream = at::cuda::getCurrentCUDAStream();
+  const auto stream = current_stream(matrices);
   const auto blocks = (count + kBlock - 1) / kBlock;
-  AT_DISPATCH_FLOATING_TYPES(
-      matrices.scalar_type(), "symmetric_eigh_3x3_cuda", [&] {
+  THO_DISPATCH_V2(matrices.scalar_type(), "symmetric_eigh_3x3_cuda", ([&] {
         symmetric_eigh_3x3_kernel<scalar_t>
             <<<blocks, kBlock, 0, stream>>>(
-                matrices.data_ptr<scalar_t>(),
-                eigenvalues.data_ptr<scalar_t>(),
-                smallest_eigenvectors.data_ptr<scalar_t>(),
+                matrices.const_data_ptr<scalar_t>(),
+                eigenvalues.mutable_data_ptr<scalar_t>(),
+                smallest_eigenvectors.mutable_data_ptr<scalar_t>(),
                 count);
-      });
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
+      }), AT_FLOATING_TYPES);
+  STD_CUDA_KERNEL_LAUNCH_CHECK();
   return {eigenvalues, smallest_eigenvectors};
 }
 

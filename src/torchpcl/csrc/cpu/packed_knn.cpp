@@ -2,9 +2,6 @@
 #include "common/candidate.h"
 #include "common/distance.h"
 
-#include <ATen/Parallel.h>
-#include <ATen/ops/empty.h>
-#include <c10/util/Exception.h>
 
 #include <algorithm>
 #include <cmath>
@@ -14,27 +11,26 @@
 namespace torchpcl {
 
 SearchResult packed_knn_cpu(
-    const at::Tensor& points,
-    const at::Tensor& point_offsets,
-    const at::Tensor& queries,
-    const at::Tensor& query_batch_ids,
+    const Tensor& points,
+    const Tensor& point_offsets,
+    const Tensor& queries,
+    const Tensor& query_batch_ids,
     int64_t k,
     double radius) {
-  TORCH_CHECK(points.device().is_cpu(), "points must be a CPU tensor");
+  STD_TORCH_CHECK(points.is_cpu(), "points must be a CPU tensor");
   // An empty slot accepts a point exactly at the bound, so the radius is
   // inclusive (see better_candidate).
   const float bound2 = inclusive_bound2(radius);
-  auto indices = at::empty(
-      {queries.size(0), k}, queries.options().dtype(at::kLong));
-  auto distances = at::empty({queries.size(0), k}, queries.options());
-  const auto* point_data = points.data_ptr<float>();
-  const auto* offsets = point_offsets.data_ptr<int64_t>();
-  const auto* query_data = queries.data_ptr<float>();
-  const auto* batches = query_batch_ids.data_ptr<int64_t>();
-  auto* output_indices = indices.data_ptr<int64_t>();
-  auto* output_distances = distances.data_ptr<float>();
+  auto indices = torch::stable::new_empty(queries, {queries.size(0), k}, kLong);
+  auto distances = torch::stable::new_empty(queries, {queries.size(0), k});
+  const auto* point_data = points.const_data_ptr<float>();
+  const auto* offsets = point_offsets.const_data_ptr<int64_t>();
+  const auto* query_data = queries.const_data_ptr<float>();
+  const auto* batches = query_batch_ids.const_data_ptr<int64_t>();
+  auto* output_indices = indices.mutable_data_ptr<int64_t>();
+  auto* output_distances = distances.mutable_data_ptr<float>();
 
-  at::parallel_for(0, queries.size(0), 64, [&](int64_t begin, int64_t end) {
+  parallel_for(0, queries.size(0), 64, [&](int64_t begin, int64_t end) {
     for (int64_t query = begin; query < end; ++query) {
       float best_distances[kMaxK];
       int32_t best_indices[kMaxK];

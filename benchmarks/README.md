@@ -114,10 +114,10 @@ CC=gcc CXX=g++ UV_PROJECT_ENVIRONMENT=.venv-benchmark \
 clang, so its `sysconfig` names `clang++` as the extension compiler. Without
 the override the native build fails ("The current installed version of clang++
 (0.0.0) is less than the minimum required version by CUDA 13.0"), even where
-clang is absent and PyTorch expects g++ anyway. Re-run this command after
-changing anything under `src/torchpcl/csrc/`: an editable install builds
-`_C.cpython-312-*.so` in the source tree, and the default environment's
-`uv sync --reinstall-package torchpcl` only rebuilds its own interpreter's copy.
+clang is absent and PyTorch expects g++ anyway. Both environments load the
+same `_C.abi3.so` from the source tree -- the extension uses only Python's
+limited API and torch's stable ABI -- so after changing anything under
+`src/torchpcl/csrc/`, rebuilding it in either environment updates both.
 
 The default `data/` pair is local and is not distributed with the repository.
 Each pair directory must contain `source.ply`, `target.ply`, and

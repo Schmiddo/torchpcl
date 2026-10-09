@@ -1,9 +1,6 @@
 #include "backend.h"
 #include "common/farthest_point.h"
 
-#include <ATen/Dispatch.h>
-#include <ATen/Parallel.h>
-#include <ATen/ops/empty.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -19,11 +16,11 @@ namespace torchpcl {
 // the point just merged in is forced to -infinity so it (and, by the same
 // rule, every earlier selection) can never be picked again, even if the
 // cloud contains exact duplicates.
-at::Tensor farthest_point_sample_cpu(
-    const at::Tensor& points, int64_t num_samples) {
+Tensor farthest_point_sample_cpu(
+    const Tensor& points, int64_t num_samples) {
   const int64_t count = points.size(0);
-  auto selected = at::empty({num_samples}, points.options().dtype(at::kLong));
-  auto* out = selected.data_ptr<int64_t>();
+  auto selected = torch::stable::new_empty(points, {num_samples}, kLong);
+  auto* out = selected.mutable_data_ptr<int64_t>();
   out[0] = 0;
 
   constexpr int64_t kGrainSize = 4096;
@@ -31,11 +28,10 @@ at::Tensor farthest_point_sample_cpu(
   const int64_t runs = std::max<int64_t>(
       1,
       std::min<int64_t>(
-          at::get_num_threads(), (count + kGrainSize - 1) / kGrainSize));
+          get_num_threads(), (count + kGrainSize - 1) / kGrainSize));
 
-  AT_DISPATCH_FLOATING_TYPES(
-      points.scalar_type(), "farthest_point_sample_cpu", [&] {
-        const auto* data = points.data_ptr<scalar_t>();
+  THO_DISPATCH_V2(points.scalar_type(), "farthest_point_sample_cpu", ([&] {
+        const auto* data = points.const_data_ptr<scalar_t>();
         const scalar_t kInfinity = std::numeric_limits<scalar_t>::infinity();
         std::vector<scalar_t> min_dist2(count, kInfinity);
 
@@ -44,7 +40,7 @@ at::Tensor farthest_point_sample_cpu(
         std::vector<Candidate> partials(runs, identity);
         int64_t center = 0;
         for (int64_t sample = 1; sample < num_samples; ++sample) {
-          at::parallel_for(0, runs, 1, [&](int64_t begin, int64_t end) {
+          parallel_for(0, runs, 1, [&](int64_t begin, int64_t end) {
             for (int64_t run = begin; run < end; ++run) {
               Candidate partial = identity;
               const int64_t last = count * (run + 1) / runs;
@@ -65,7 +61,7 @@ at::Tensor farthest_point_sample_cpu(
           center = best.index;
           out[sample] = center;
         }
-      });
+      }), AT_FLOATING_TYPES);
   return selected;
 }
 

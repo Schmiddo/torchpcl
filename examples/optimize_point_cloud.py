@@ -112,19 +112,19 @@ def random_source(target: torch.Tensor, seed: int) -> torch.Tensor:
 
 def resolve_device(requested: str) -> torch.device:
     if requested == "auto":
-        from torchpcl import _C
+        from torchpcl._backend import has_cuda
 
-        requested = "cuda" if torch.cuda.is_available() and _C.has_cuda() else "cpu"
+        requested = "cuda" if torch.cuda.is_available() and has_cuda() else "cpu"
 
     device = torch.device(requested)
     if device.type not in {"cpu", "cuda"}:
         raise ValueError("torchpcl point-cloud search supports CPU and CUDA devices")
     if device.type == "cuda":
-        from torchpcl import _C
+        from torchpcl._backend import has_cuda
 
         if not torch.cuda.is_available():
             raise ValueError("CUDA was requested, but PyTorch cannot access a CUDA device")
-        if not _C.has_cuda():
+        if not has_cuda():
             raise ValueError("CUDA was requested, but torchpcl was built without CUDA")
     return device
 

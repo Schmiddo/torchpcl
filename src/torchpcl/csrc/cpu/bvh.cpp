@@ -5,8 +5,6 @@
 #include "cuBQL/queries/pointData/findClosest.h"
 #include "cuBQL/queries/pointData/knn.h"
 
-#include <ATen/Parallel.h>
-#include <ATen/ops/empty.h>
 
 #include <algorithm>
 #include <atomic>
@@ -22,7 +20,7 @@ namespace {
 
 // Whether this thread already runs inside an OpenMP parallel region, where a
 // nested one would oversubscribe. torch's libgomp is the one loaded (same
-// soname), so this sees at::parallel_for's regions too.
+// soname), so this sees torch's parallel_for regions too.
 bool in_parallel_region() {
 #ifdef _OPENMP
   return omp_in_parallel();
@@ -100,13 +98,13 @@ class Builder {
 
 }  // namespace
 
-BvhResult build_bvh_cpu(const at::Tensor& points) {
+BvhResult build_bvh_cpu(const Tensor& points) {
   const auto* point_data =
-      reinterpret_cast<const cuBQL::vec3f*>(points.data_ptr<float>());
+      reinterpret_cast<const cuBQL::vec3f*>(points.const_data_ptr<float>());
   const auto count = static_cast<uint32_t>(points.size(0));
   // Like cuBQL's builder, leave out points whose box is empty (NaN).
-  auto prim_ids = at::empty({count}, points.options().dtype(at::kInt));
-  auto* ids = reinterpret_cast<uint32_t*>(prim_ids.data_ptr<int32_t>());
+  auto prim_ids = torch::stable::new_empty(points, {count}, kInt);
+  auto* ids = reinterpret_cast<uint32_t*>(prim_ids.mutable_data_ptr<int32_t>());
   uint32_t kept = 0;
   for (uint32_t i = 0; i < count; ++i) {
     if (!cuBQL::box3f().including(point_data[i]).empty()) ids[kept++] = i;
@@ -114,54 +112,55 @@ BvhResult build_bvh_cpu(const at::Tensor& points) {
   // cuBQL reads a node with no points as an inner node, so a tree over no
   // points cannot be traversed; `bvh_knn_cpu` answers that case without one.
   if (kept == 0) {
-    return {at::empty({0, kBvhNodeBytes}, points.options().dtype(at::kByte)),
-            prim_ids.narrow(0, 0, 0)};
+    return {torch::stable::new_empty(points, {0, kBvhNodeBytes}, kByte),
+            torch::stable::narrow(prim_ids, 0, 0, 0)};
   }
 
   // A binary tree over n points has at most 2n - 1 nodes.
-  auto nodes = at::empty(
-      {2 * int64_t{kept} - 1, kBvhNodeBytes}, points.options().dtype(at::kByte));
+  auto nodes = torch::stable::new_empty(
+      points, {2 * int64_t{kept} - 1, kBvhNodeBytes}, kByte);
   Builder builder(
       point_data, ids,
-      reinterpret_cast<cuBQL::bvh3f::Node*>(nodes.data_ptr<uint8_t>()),
+      reinterpret_cast<cuBQL::bvh3f::Node*>(nodes.mutable_data_ptr<uint8_t>()),
       kCpuBvhLeafSize);
   if (kept <= kTaskPoints || in_parallel_region()) {
     builder.build(0, 0, kept);
   } else {
-#pragma omp parallel num_threads(at::get_num_threads())
+#pragma omp parallel num_threads(get_num_threads())
 #pragma omp single
     builder.build(0, 0, kept);
   }
 
   // Shrink to the nodes actually used.
   const auto used = static_cast<int64_t>(builder.node_count());
-  return {nodes.narrow(0, 0, used).clone(), prim_ids.narrow(0, 0, kept)};
+  return {torch::stable::clone(torch::stable::narrow(nodes, 0, 0, used)),
+          torch::stable::narrow(prim_ids, 0, 0, kept)};
 }
 
 SearchResult bvh_knn_cpu(
-    const at::Tensor& nodes,
-    const at::Tensor& prim_ids,
-    const at::Tensor& points,
-    const at::Tensor& queries,
+    const Tensor& nodes,
+    const Tensor& prim_ids,
+    const Tensor& points,
+    const Tensor& queries,
     int64_t k,
     double radius) {
   const auto count = queries.size(0);
-  auto indices = at::empty({count, k}, queries.options().dtype(at::kLong));
-  auto distances = at::empty({count, k}, queries.options());
+  auto indices = torch::stable::new_empty(queries, {count, k}, kLong);
+  auto distances = torch::stable::new_empty(queries, {count, k});
   if (prim_ids.numel() == 0) {  // every reference point was NaN
-    indices.fill_(-1);
-    distances.fill_(std::numeric_limits<float>::infinity());
+    torch::stable::fill_(indices, -1);
+    torch::stable::fill_(distances, std::numeric_limits<float>::infinity());
     return {indices, distances};
   }
   const cuBQL::bvh3f bvh = bvh_view(nodes, prim_ids);
   const float bound2 = inclusive_bound2(radius);
   const float cull2 = cull_bound2(bound2);
   const auto* point_data =
-      reinterpret_cast<const cuBQL::vec3f*>(points.data_ptr<float>());
+      reinterpret_cast<const cuBQL::vec3f*>(points.const_data_ptr<float>());
   const auto* query_data =
-      reinterpret_cast<const cuBQL::vec3f*>(queries.data_ptr<float>());
-  auto* output_indices = indices.data_ptr<int64_t>();
-  auto* output_distances = distances.data_ptr<float>();
+      reinterpret_cast<const cuBQL::vec3f*>(queries.const_data_ptr<float>());
+  auto* output_indices = indices.mutable_data_ptr<int64_t>();
+  auto* output_distances = distances.mutable_data_ptr<float>();
   // One output slot: the candidate and its exact distance, or empty.
   const auto write = [&](int64_t slot, int index, cuBQL::vec3f query) {
     const float distance2 = index >= 0
@@ -174,7 +173,7 @@ SearchResult bvh_knn_cpu(
   };
 
   if (k == 1) {
-    at::parallel_for(0, count, 512, [&](int64_t begin, int64_t end) {
+    parallel_for(0, count, 512, [&](int64_t begin, int64_t end) {
       for (int64_t query = begin; query < end; ++query) {
         write(query,
               cuBQL::points::findClosest(
@@ -185,7 +184,7 @@ SearchResult bvh_knn_cpu(
     return {indices, distances};
   }
 
-  at::parallel_for(0, count, 128, [&](int64_t begin, int64_t end) {
+  parallel_for(0, count, 128, [&](int64_t begin, int64_t end) {
     cuBQL::knn::Candidate candidates[kMaxK];
     for (int64_t query = begin; query < end; ++query) {
       const auto result = cuBQL::points::findKNN(
