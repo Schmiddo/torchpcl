@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Local versions name the build variant: `+cu130` for stable-ABI wheels that
+# serve every supported torch, `+torch2.14.0.cu130` for older releases built
+# per torch version.
 BUILD_VARIANT_PATTERN = re.compile(
-    r"\+torch(?P<torch>[0-9]+(?:\.[0-9]+)*)\.(?P<cuda>cu[0-9]+)-"
+    r"\+(?:torch(?P<torch>[0-9]+(?:\.[0-9]+)*)\.)?(?P<cuda>cu[0-9]+)-"
     r"[^-]+-[^-]+-[^-]+\.whl$"
 )
 
@@ -108,8 +111,9 @@ def render_index(
             f"{html.escape(label)}</a></li>"
             for label, slug in variant_indexes
         )
-        install_instructions = f"""<p>Select the index matching the installed
-      PyTorch and CUDA build:</p>
+        install_instructions = f"""<p>Select the index matching the CUDA build of
+      the installed PyTorch; releases before the stable-ABI wheels have one
+      index per PyTorch version:</p>
       <ul>
 {choices}
       </ul>"""
@@ -144,8 +148,10 @@ def wheel_variant(name: str) -> tuple[str, str] | None:
     match = BUILD_VARIANT_PATTERN.search(name)
     if match is None:
         return None
-    torch_version = match.group("torch").removesuffix(".")
+    torch_version = match.group("torch")
     cuda = match.group("cuda")
+    if torch_version is None:
+        return f"{cuda}, any Torch >= 2.10", cuda
     return f"Torch {torch_version}, {cuda}", f"torch{torch_version}-{cuda}"
 
 

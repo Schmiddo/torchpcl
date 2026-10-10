@@ -11,14 +11,18 @@ registration, and single- or multi-scale ICP. See the
 ## Installation
 
 Binary wheels from tagged releases are available through the
-[wheel index](https://schmiddo.github.io/torchpcl/wheels/). Select the index
-matching the installed PyTorch and CUDA build. For example, for PyTorch 2.14.0
-with CUDA 13.0:
+[wheel index](https://schmiddo.github.io/torchpcl/wheels/). The extension uses
+only PyTorch's stable ABI and Python's limited API, so one wheel per CUDA build
+serves every PyTorch >= 2.10 and Python >= 3.12. Select the index matching the
+CUDA build of the installed PyTorch, e.g. for CUDA 13.0:
 
 ```bash
 uv pip install --no-deps torchpcl \
-  --find-links https://schmiddo.github.io/torchpcl/wheels/torch2.14.0-cu130/
+  --find-links https://schmiddo.github.io/torchpcl/wheels/cu130/
 ```
+
+Earlier releases were built per PyTorch version and keep their indexes, such
+as `wheels/torch2.14.0-cu130/`.
 
 To install from source, clone the repository with its cuBQL submodule and sync
 the environment:

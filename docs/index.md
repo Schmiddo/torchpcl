@@ -9,7 +9,8 @@ The API is not final yet and might change at any time.
 
 We recommend [`uv`](https://docs.astral.sh/uv/) for installation.
 Binary wheels from tagged releases are available through the [wheel index](https://schmiddo.github.io/torchpcl/wheels/).
-Select the index matching your installed PyTorch and CUDA build; uv will then select the wheel for the current Python and machine architecture.
+One wheel per CUDA build serves every PyTorch >= 2.10 and Python >= 3.12, since the extension uses only PyTorch's stable ABI and Python's limited API.
+Select the index matching the CUDA build of your installed PyTorch; uv will then select the wheel for the machine architecture.
 
 Add the selected wheel index to your project's `pyproject.toml`:
 
@@ -19,16 +20,18 @@ dependencies = ["torchpcl"]
 
 [tool.uv]
 find-links = [
-  "https://schmiddo.github.io/torchpcl/wheels/torch2.14.0-cu130/",
+  "https://schmiddo.github.io/torchpcl/wheels/cu130/",
 ]
 ```
 
-For example, for PyTorch 2.14.0 with CUDA 13.0:
+For example, for any PyTorch build with CUDA 13.0:
 
 ```bash
 uv pip install --no-deps torchpcl \
-  --find-links https://schmiddo.github.io/torchpcl/wheels/torch2.14.0-cu130/
+  --find-links https://schmiddo.github.io/torchpcl/wheels/cu130/
 ```
+
+Earlier releases were built per PyTorch version and keep their indexes, such as `wheels/torch2.14.0-cu130/`.
 
 Alternatively, install the newest version from source. The cuBQL headers are
 the only Git submodule required by the build:
