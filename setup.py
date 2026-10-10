@@ -53,9 +53,12 @@ def cuda_enabled() -> bool:
 def parallel_flags() -> tuple[list[str], list[str]]:
     # The CPU BVH builder uses OpenMP tasks directly; without -fopenmp it
     # builds serially. (torch's parallel_for runs inside libtorch.)
+    # -ffp-contract=off keeps GCC from fusing products into additions where
+    # the target has FMA (always on aarch64), so distances round the same on
+    # every architecture; see common/distance.h.
     if sys.platform.startswith("linux"):
-        return ["-O3", "-fopenmp"], ["-fopenmp"]
-    return ["-O3"], []
+        return ["-O3", "-ffp-contract=off", "-fopenmp"], ["-fopenmp"]
+    return ["-O3", "-ffp-contract=off"], []
 
 
 cubql_root = find_cubql_root()

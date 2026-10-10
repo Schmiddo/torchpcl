@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-# Local versions name the build variant: `+cu130` for stable-ABI wheels that
-# serve every supported torch, `+torch2.14.0.cu130` for older releases built
-# per torch version.
+# Local versions name the build variant: `+cu130` or `+cpu` for stable-ABI
+# wheels that serve every supported torch, `+torch2.14.0.cu130` for older
+# releases built per torch version.
 BUILD_VARIANT_PATTERN = re.compile(
-    r"\+(?:torch(?P<torch>[0-9]+(?:\.[0-9]+)*)\.)?(?P<cuda>cu[0-9]+)-"
+    r"\+(?:torch(?P<torch>[0-9]+(?:\.[0-9]+)*)\.)?(?P<cuda>cu[0-9]+|cpu)-"
     r"[^-]+-[^-]+-[^-]+\.whl$"
 )
 

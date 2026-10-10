@@ -9,8 +9,10 @@ The API is not final yet and might change at any time.
 
 We recommend [`uv`](https://docs.astral.sh/uv/) for installation.
 Binary wheels from tagged releases are available through the [wheel index](https://schmiddo.github.io/torchpcl/wheels/).
-One wheel per CUDA build serves every PyTorch >= 2.10 and Python >= 3.12, since the extension uses only PyTorch's stable ABI and Python's limited API.
-Select the index matching the CUDA build of your installed PyTorch; uv will then select the wheel for the machine architecture.
+One wheel per PyTorch build serves every PyTorch >= 2.10 and Python >= 3.12, since the extension uses only PyTorch's stable ABI and Python's limited API.
+Select the index matching the build of your installed PyTorch: `cu130` for CUDA 13, `cu126` for CUDA 12.6 and newer CUDA 12 builds, or `cpu` for CPU-only PyTorch.
+A CUDA wheel does not load with a CPU-only PyTorch.
+uv will then select the wheel for the machine architecture.
 
 Add the selected wheel index to your project's `pyproject.toml`:
 

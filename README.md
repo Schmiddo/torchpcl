@@ -12,9 +12,10 @@ registration, and single- or multi-scale ICP. See the
 
 Binary wheels from tagged releases are available through the
 [wheel index](https://schmiddo.github.io/torchpcl/wheels/). The extension uses
-only PyTorch's stable ABI and Python's limited API, so one wheel per CUDA build
+only PyTorch's stable ABI and Python's limited API, so one wheel per PyTorch build
 serves every PyTorch >= 2.10 and Python >= 3.12. Select the index matching the
-CUDA build of the installed PyTorch, e.g. for CUDA 13.0:
+build of the installed PyTorch: `cu130` for CUDA 13, `cu126` for CUDA 12.6 and
+newer CUDA 12 builds, or `cpu` for CPU-only PyTorch. For example, for CUDA 13.0:
 
 ```bash
 uv pip install --no-deps torchpcl \
