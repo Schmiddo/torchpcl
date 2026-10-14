@@ -1,32 +1,28 @@
 # torchpcl
 
 Tensor-first point-cloud processing for PyTorch.
-Currently supports packed ragged batching and fast nearest-neighbor search on CPU and CUDA.
-
-The public API covers neighbor search, voxelization, farthest-point downsampling,
-normal estimation, point-cloud metrics, FPFH features with fast global
-registration, and single- or multi-scale ICP. See the
+Currently supported are neighbor search, voxelization, farthest point sampling,
+normals, outlier filtering, FPFH features with fast global registration, and
+single- or multi-scale ICP; most ops support packed ragged batches. See the
 [API reference](docs/api.md) and [batching guide](docs/batching.md).
 
 ## Installation
 
-Binary wheels from tagged releases are available through the
-[wheel index](https://schmiddo.github.io/torchpcl/wheels/). The extension uses
-only PyTorch's stable ABI and Python's limited API, so one wheel per PyTorch build
-serves every PyTorch >= 2.10 and Python >= 3.12. Select the index matching the
-build of the installed PyTorch: `cu130` for CUDA 13, `cu126` for CUDA 12.6 and
-newer CUDA 12 builds, or `cpu` for CPU-only PyTorch. For example, for CUDA 13.0:
+Binary wheels are available through the
+[wheel index](https://schmiddo.github.io/torchpcl/wheels/).
+We provide wheels for PyTorch >= 2.10 and Python >= 3.12 using PyTorch's stable
+ABI and Python's limited API. Select the index matching your
+PyTorch build: `cu130` (CUDA 13), `cu126` (CUDA 12.6+), or `cpu`:
 
 ```bash
 uv pip install --no-deps torchpcl \
   --find-links https://schmiddo.github.io/torchpcl/wheels/cu130/
 ```
 
-Earlier releases were built per PyTorch version and keep their indexes, such
-as `wheels/torch2.14.0-cu130/`.
+Earlier releases built per-PyTorch wheels that are available in separate
+indexes, such as `wheels/torch2.14.0-cu130/`.
 
-To install from source, clone the repository with its cuBQL submodule and sync
-the environment:
+To install from source, clone with the cuBQL submodule:
 
 ```bash
 git clone --recurse-submodules https://github.com/Schmiddo/torchpcl.git
@@ -34,35 +30,20 @@ cd torchpcl
 uv sync
 ```
 
-The native extensions are compiled against PyTorch in the active environment,
-so build isolation must be disabled when using pip directly:
+The extension is compiled against the installed PyTorch, so pip needs build
+isolation disabled:
 
 ```bash
 pip install --no-build-isolation .
 ```
 
-A CUDA build requires `CUDA_HOME` to point to a toolkit compatible with the
-installed PyTorch. The default `TORCHPCL_WITH_CUDA=auto` builds CUDA when such a
-toolkit is found and otherwise builds CPU-only with an explicit warning. Use
-`TORCHPCL_WITH_CUDA=1` to require CUDA or `TORCHPCL_WITH_CUDA=0` to force a
-CPU-only build.
+Build options (environment variables):
 
-Set `TORCH_CUDA_ARCH_LIST` to override local GPU architecture detection or
-`TORCHPCL_CUBQL_DIR` to use an external cuBQL checkout.
-
-Published source distributions include the required cuBQL headers. If an
-existing Git checkout does not have the submodule initialized, run:
-
-```bash
-git submodule update --init third_party/cuBQL
-```
-
-Trimesh is only needed for the repository's file-processing tools, and the
-optimization example. Install all tools with:
-
-```bash
-pip install --no-build-isolation ".[tools]"
-```
+- `CUDA_HOME`: CUDA toolkit compatible with the installed PyTorch.
+- `TORCHPCL_WITH_CUDA`: `auto` (default; CPU-only with a warning if no toolkit
+  is found), `1` to require CUDA, `0` for CPU-only.
+- `TORCH_CUDA_ARCH_LIST`: override GPU architecture detection.
+- `TORCHPCL_CUBQL_DIR`: use an external cuBQL checkout.
 
 ## Point Clouds
 
@@ -75,17 +56,15 @@ import torchpcl as tp
 
 cloud_a = torch.randn(2_000, 3, device="cuda")
 cloud_b = torch.randn(3_500, 3, device="cuda")
+
 points = torch.cat([cloud_a, cloud_b])
-cloud = tp.PointCloud(
-    points,
-    torch.tensor([0, len(cloud_a), len(points)], device=points.device),
-)
+offsets = torch.tensor([0, len(cloud_a), len(points)], device=points.device)
+
+cloud = tp.PointCloud(points, offsets)
 ```
 
-Tensor batches are flattened to packed row order without copying when their
-storage permits it. Offsets delimit contiguous clouds and returned neighbor
-indices refer to global rows in the packed point tensor. Variable-length
-padded data must be converted explicitly:
+Returned neighbor indices refer to rows of the packed point tensor. Padded
+data must be converted explicitly:
 
 ```python
 cloud = tp.PointCloud.from_padded(padded_points, lengths)
@@ -132,29 +111,21 @@ valid_moments = moments.valid          # false where < 3 neighbors were found
 Normal orientation is explicit and can use a shared or per-cloud viewpoint:
 
 ```python
-cloud = PointCloud.from_points(downsampled.points, normal_result.normals)
+cloud = tp.PointCloud.from_points(downsampled.points, normal_result.normals)
 oriented_cloud = tp.orient_normals_toward_viewpoint(cloud, viewpoint)
 ```
 
-Use `orient_normals_to_direction` when a known sensor or world direction is a
-better sign convention. These helpers never estimate normals or run graph
-propagation.
-
+`orient_normals_to_direction` uses a fixed direction instead.
 
 Cleaning is mask-first so inspection and selection stay separate:
 
 ```python
-outliers = tp.radius_outliers(
-    cloud,
-    radius=0.10,
-    k=8,
-)
+outliers = tp.radius_outliers(cloud, radius=0.10, k=8)
 clean = cloud.select_points(~outliers)
 ```
 
-The query point itself is included in the neighbor count. The radius boundary
-is inclusive. `statistical_outliers` provides the corresponding per-cloud k-NN
-distance filter and likewise includes the query point.
+The query point counts as a neighbor and the radius boundary is inclusive.
+`statistical_outliers` is the per-cloud k-NN distance filter.
 
 ## Corresponding-Point Alignment
 
@@ -169,12 +140,9 @@ similarity = tp.procrustes(source, target, estimate_scale=True)
 scales = similarity.scale               # (B,)
 ```
 
-Tensor inputs represent one cloud or an equal-length batch. Packed `PointCloud`
-inputs support ragged batches and require equal source and target lengths in
-every batch entry.
-Rotation, translation, scale, and weights participate in ordinary PyTorch
-autograd. Degenerate correspondence sets with fewer than three positively
-weighted non-collinear points are rejected.
+Packed inputs require equal source and target lengths per batch entry. Results
+are differentiable; fewer than three positively weighted non-collinear points
+are rejected.
 
 ## Neighbor Search
 
@@ -190,12 +158,8 @@ nearest.distances2    # squared distances in the input dtype
 nearest.valid         # explicit validity mask
 ```
 
-The selected candidates are the nearest under the backend's float32 search
-coordinates, but their row order and tie resolution are unspecified. Squared
-distances are recomputed from the original tensors in their input dtype.
-Queries paired with an empty reference batch receive all-invalid rows.
-
-`tp.knn`, `tp.radius_neighbors`, and `tp.hybrid_neighbors` provide equivalent
+Candidates are selected in float32; row order and tie resolution are
+unspecified. `tp.knn`, `tp.radius_neighbors`, and `tp.hybrid_neighbors` provide equivalent
 one-shot calls.
 
 ## Metrics
@@ -215,13 +179,9 @@ scores = tp.fscore(prediction, reference, threshold=0.01)
 metrics = tp.point_cloud_metrics(prediction, reference, threshold=0.05)
 ```
 
-F-score and combined metric fields always retain the batch dimension, including
-the implicit batch of size one created by an `(N, 3)` tensor. F-score accepts
-one scalar threshold per call.
-
-Chamfer distances are differentiable with nearest-neighbor identity treated as
-piecewise constant. Convert padded batches to `PointCloud` before computing
-metrics.
+Results keep the batch dimension, even for an `(N, 3)` input. Chamfer
+distances are differentiable, with nearest-neighbor identity treated as
+piecewise constant.
 
 ## Registration
 
@@ -250,9 +210,8 @@ result.inlier_rmse      # (B,), final-level RMSE
 result.level_results    # One diagnostic result per requested level
 ```
 
-Point-to-plane requires normals attached to the target cloud. Estimate them
-explicitly with `estimate_normals` when they are not already available.
-Correspondences and neighbor indices remain internal.
+Point-to-plane requires normals attached to the target cloud; ICP never
+estimates them implicitly.
 
 Multi-scale ICP uses the same function with several levels:
 
@@ -277,20 +236,17 @@ levels = [
 result = tp.icp(source, target, levels)
 ```
 
-Every voxelized level is constructed from the original clouds.
-`voxel_size=None` uses the original clouds directly, which also allows a
-multi-scale schedule to finish at full resolution.
+Each level is voxelized from the original clouds; `voxel_size=None` uses them
+at full resolution.
 
 `evaluate_registration` evaluates supplied transforms without iteration and
 returns `RegistrationMetrics`.
 
 ### PLY registration tool
 
-The `torchpcl.tools.register` tool aligns two or more PLY point clouds. By
-default it downsamples and describes every cloud, runs fast global registration
-for every pair, chooses a maximum spanning tree using inlier fitness, and runs
-point-to-point ICP only along that tree. The final input defines the output
-reference frame:
+`torchpcl.tools.register` aligns two or more PLY clouds: it runs FPFH-based
+global registration for every pair, picks a maximum spanning tree by fitness,
+and refines its edges with ICP. The last input defines the reference frame:
 
 ```bash
 uv run -m torchpcl.tools.register scan-1.ply scan-2.ply scan-3.ply \
@@ -298,40 +254,24 @@ uv run -m torchpcl.tools.register scan-1.ply scan-2.ply scan-3.ply \
     --output combined.ply
 ```
 
-It prints every input-to-reference matrix and the metrics for the selected ICP
-edges. The optional output preserves standard PLY `red`, `green`, and `blue`
-vertex colors; each uncolored input receives a reproducible random solid color.
-A same-stem `.npz` file contains one boolean point-ownership mask per input,
-keyed by its filename stem. Duplicate stems receive `-1`, `-2`, and subsequent
-suffixes. The normal, feature, FGR, and ICP radii default to multiples of
-`--voxel-size` and can be overridden independently; choose a voxel size
-appropriate for the units and sampling density of the input clouds.
-
-Use `--no-global-registration` to ICP an input-order chain from identity, or
-`--icp-objective point-to-plane` to use target normals (estimating them when
-the PLY does not contain normals). The equivalent module invocation is:
-
-```bash
-python -m torchpcl.tools.register scan-1.ply scan-2.ply scan-3.ply
-```
+It prints each input-to-reference transform and the ICP metrics. The merged
+output keeps PLY colors (uncolored inputs get a random solid color), and a
+same-stem `.npz` holds one point-ownership mask per input. All radii default to
+multiples of `--voxel-size`; choose it for the units and density of your data.
+`--no-global-registration` chains ICP from identity in input order, and
+`--icp-objective point-to-plane` uses (or estimates) target normals.
 
 ## Behavior
 
-- Geometry supports float32 and float64 on CPU and CUDA.
-- Neighbor candidate selection uses float32 coordinates for both input dtypes.
-  Returned squared distances use the input dtype, so float64 inputs retain
-  float64 distance evaluation but not float64 candidate selection.
-- Paired inputs must have identical dtype, device, and batch size.
-- Procrustes alignment, transforms, voxel reductions, and gathered metric
-  distances support autograd. Search indices are discrete; normals and ICP are
-  inference-only.
-- CPU and CUDA may choose different indices when float32 search distances tie.
-- Empty batch entries are supported by storage, transforms, voxelization, and
-  search queries. Metrics and registration reject empty cloud pairs.
-- Multi-cloud batches currently use brute-force search; BVH indexing currently
-  supports a single reference cloud.
-- `farthest_point_sample` currently supports a single cloud; batching is not
-  yet implemented.
+- Geometry supports float32 and float64 on CPU and CUDA; paired inputs must
+  share dtype, device, and batch size.
+- Neighbor candidates are selected in float32; distances use the input dtype.
+- Procrustes, transforms, voxel reductions, and metric distances support
+  autograd; normals, FPFH, and ICP are inference-only.
+- BVH search and `farthest_point_sample` currently handle one cloud at a time;
+  batched search falls back to brute force.
+
+See the [batching guide](docs/batching.md) for empty entries and other details.
 
 ## Development
 
@@ -340,8 +280,8 @@ uv sync --group dev
 uv run pytest -q
 ```
 
-CUDA tests are collected when `torch.cuda.is_available()` and the CUDA search
-extensions are installed. After changing native sources, rebuild with:
+CUDA tests run when a GPU and the CUDA extension are available. Rebuild after
+changing native sources:
 
 ```bash
 uv sync --reinstall-package torchpcl
@@ -349,19 +289,13 @@ uv sync --reinstall-package torchpcl
 
 ## Benchmarks
 
-Track performance per revision, with Open3D and small-gicp as reference
-baselines:
+Performance can be tracked per revision against Open3D and small-gicp:
 
 ```bash
-just benchmark --keep           # every routine profile, kept in the history
-just benchmark-baselines --keep # baselines, in the Python 3.12 environment
+just benchmark --keep           # routine profiles, kept in the history
+just benchmark-baselines --keep # Open3D/small-gicp reference values
 just benchmark-dashboard        # plot the history
-just benchmark-run registration --device cuda   # ad hoc, any parameters
 ```
 
-Suites cover neighbor search, preprocessing and FPFH (`operations`), farthest
-point sampling (`sampling`), ICP/FGR on a ground-truth pair (`registration`)
-and FGR recall on Redwood's four scenes (`redwood`, after `just download-data`).
-Output includes runtime, ground-truth accuracy, peak process RAM, and
-per-process peak VRAM. See the [benchmark guide](benchmarks/README.md) for
-profiles, measurement scope, the baseline environment and the history.
+See the [benchmark guide](benchmarks/README.md) for suites, measurement scope,
+and setup.

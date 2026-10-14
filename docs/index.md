@@ -1,42 +1,34 @@
 # torchpcl
 
-`torchpcl` implements common point-cloud processing routines for PyTorch, in particular fast nearest-neighbor search and registration.
-It strives to provide an easy-to-use, yet performant developer experience.
+`torchpcl` implements common point-cloud processing routines for PyTorch, in particular fast nearest-neighbor search and registration, on CPU and CUDA.
 
-The API is not final yet and might change at any time.
+The API is not final yet and may change.
 
 ## Installation
 
-We recommend [`uv`](https://docs.astral.sh/uv/) for installation.
-Binary wheels from tagged releases are available through the [wheel index](https://schmiddo.github.io/torchpcl/wheels/).
-One wheel per PyTorch build serves every PyTorch >= 2.10 and Python >= 3.12, since the extension uses only PyTorch's stable ABI and Python's limited API.
-Select the index matching the build of your installed PyTorch: `cu130` for CUDA 13, `cu126` for CUDA 12.6 and newer CUDA 12 builds, or `cpu` for CPU-only PyTorch.
+Binary wheels are available through the [wheel index](https://schmiddo.github.io/torchpcl/wheels/).
+One wheel serves every PyTorch >= 2.10 and Python >= 3.12.
+Select the index matching your PyTorch build: `cu130` (CUDA 13), `cu126` (CUDA 12.6+), or `cpu`.
 A CUDA wheel does not load with a CPU-only PyTorch.
-uv will then select the wheel for the machine architecture.
-
-Add the selected wheel index to your project's `pyproject.toml`:
-
-```toml
-[project]
-dependencies = ["torchpcl"]
-
-[tool.uv]
-find-links = [
-  "https://schmiddo.github.io/torchpcl/wheels/cu130/",
-]
-```
-
-For example, for any PyTorch build with CUDA 13.0:
 
 ```bash
 uv pip install --no-deps torchpcl \
   --find-links https://schmiddo.github.io/torchpcl/wheels/cu130/
 ```
 
-Earlier releases were built per PyTorch version and keep their indexes, such as `wheels/torch2.14.0-cu130/`.
+With [`uv`](https://docs.astral.sh/uv/), the index can also be added to your project's `pyproject.toml`:
 
-Alternatively, install the newest version from source. The cuBQL headers are
-the only Git submodule required by the build:
+```toml
+[project]
+dependencies = ["torchpcl"]
+
+[tool.uv]
+find-links = ["https://schmiddo.github.io/torchpcl/wheels/cu130/"]
+```
+
+Earlier releases keep their per-PyTorch indexes, such as `wheels/torch2.14.0-cu130/`.
+
+To build from source, clone with the cuBQL submodule:
 
 ```bash
 git clone --recurse-submodules https://github.com/Schmiddo/torchpcl.git
@@ -44,9 +36,8 @@ cd torchpcl
 uv sync
 ```
 
-Ensure that `CUDA_HOME` points to your CUDA toolkit location. Use
-`TORCHPCL_WITH_CUDA=1` to force a GPU-enabled build and
-`TORCHPCL_WITH_CUDA=0` for a CPU-only build.
+Set `CUDA_HOME` to your CUDA toolkit; `TORCHPCL_WITH_CUDA=1` requires a CUDA
+build and `TORCHPCL_WITH_CUDA=0` forces CPU-only.
 
 ## Documentation
 

@@ -31,10 +31,9 @@ the selected tensors. Batch entries may become empty.
 
 ### PLY I/O
 
-`torchpcl.io.load(path)` loads one PLY vertex cloud. The `x`, `y`, and `z`
-properties are required; complete `nx`/`ny`/`nz` normals are preserved when present.
-The geometry output dtype can be selected with `dtype=torch.float32` or
-`dtype=torch.float64`.
+`torchpcl.io.load(path, *, dtype=torch.float32, feature_names=())` loads one
+PLY vertex cloud. The `x`, `y`, and `z` properties are required; complete
+`nx`/`ny`/`nz` normals are preserved when present.
 
 `torchpcl.io.save(path, cloud)` saves one tensor or one-entry `PointCloud` as binary
 PLY. Additional scalar vertex properties can be mapped to the `PointCloud.features`
@@ -91,10 +90,6 @@ batch size 1); a batched input raises `ValueError`. Returns a `PointCloud`
 with points in selection order, not input order. If `num_samples >= N`, all
 points are returned unchanged (in input order). Attached normals and features
 are carried along for the selected points.
-
-Runs the entire greedy loop natively (CPU or CUDA), like the other
-native-backed operations (search, normals, FPFH); a non-CPU/CUDA device
-raises `RuntimeError`.
 
 ### `estimate_normals(...)`
 
@@ -245,7 +240,7 @@ fast_global_registration_from_correspondences(
 `PointCloud.features`. `CorrespondenceSet` stores source and target point-row
 indices plus optional squared descriptor distances.
 
-The current FGR prototype supports one source/target cloud pair. The
+FGR currently supports one source/target cloud pair. The
 feature-driven entry point performs mutual matching and delegates to the
 correspondence-driven solver. `FGROptions` requires
 `max_correspondence_distance` and provides an iteration budget plus optional
@@ -281,9 +276,7 @@ Robust losses are IRLS weight functions of the residual magnitude `r`
 - `L1Loss`: `1 / r` (no `delta`).
 - `CauchyLoss`: `1 / (1 + (r / delta)^2)`.
 - `GMLoss`: `delta^2 / (delta^2 + r^2)^2`, matching Open3D's Geman-McClure
-  kernel exactly — note this does not evaluate to `1` at `r = 0` the way the
-  other kernels do, since a per-kernel constant scale factor does not change
-  the weighted least-squares solution.
+  kernel (not normalized to `1` at `r = 0`).
 - `TukeyLoss`: `(1 - (r / delta)^2)^2` for `r <= delta`, else `0`.
 
 The result contains final transforms, final-level convergence and metrics,

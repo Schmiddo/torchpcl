@@ -81,9 +81,6 @@ dtypes. Public squared distances are recomputed from the original points and
 queries in their input dtype. Consequently, float64 search results retain
 float64 distance evaluation, while candidate identity has float32 precision.
 
-CUDA results stay on CUDA. Testing and application code should compare them
-with `torch.testing.assert_close` rather than NumPy-based helpers.
-
 ## Gradients
 
 Transforms, Procrustes alignment, voxel reductions, and Chamfer distances use
